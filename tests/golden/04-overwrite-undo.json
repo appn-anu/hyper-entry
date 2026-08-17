@@ -1,0 +1,16 @@
+{
+  "description": "Jump back to a filled row, overwrite it, then take the overwrite back.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["jump", 1],
+    ["overwrite"],
+    ["undo"],
+    ["jump", 3],
+    ["confirm"]
+  ]
+}

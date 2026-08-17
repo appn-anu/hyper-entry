@@ -1,0 +1,7 @@
+timestamp,action,file_num,plan_row_index,note,row,range,rep,tech_rep,Day,BCN,trial,treatment,ecotype
+2026-08-18T08:00:01+02:00,confirm,10,0,,1,1,1,,1,44518,TLN-53190,Treatment_1,winter
+2026-08-18T08:00:02+02:00,confirm,11,1,,2,1,1,,1,44518,TLN-53190,Treatment_1,winter
+2026-08-18T08:00:03+02:00,meta,,2,"Subfolder=block2",3,1,2,,1,42630,TLN-53190,Treatment_1,winter
+2026-08-18T08:00:04+02:00,confirm,12,2,,3,1,2,,1,42630,TLN-53190,Treatment_1,winter
+2026-08-18T08:00:05+02:00,confirm,13,3,,1,2,1,,1,V1,TLN-53190,Treatment_2,spring
+2026-08-18T08:00:06+02:00,confirm,14,4,,2,2,1,,1,42630,TLN-53190,Treatment_2,spring

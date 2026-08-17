@@ -44,9 +44,10 @@ row,range,rep,tech_rep,FileNum,WRNum,comments,Date,Day,Prefix,Subfolder,
 BCN,trial,treatment,plate,Q2_pos,order
 ```
 
-Required columns: `FileNum`, `Date`, `Prefix`, `Subfolder`. Everything else is optional.
-A missing required column is a hard load error; anything else missing just means less
-on the target card.
+Required columns: `FileNum`, `Date`, `Prefix`, `Subfolder`, `comments`. Everything
+else is optional. A missing required column is a hard load error; anything else missing
+just means less on the target card. A file with a header but no data rows is refused
+the same way - there is nothing to walk.
 
 Column roles:
 
@@ -54,7 +55,7 @@ Column roles:
 |---|---|---|
 | Per-row capture | `FileNum`, `comments` | Filled by the app on every captured row |
 | Change-tracked values | `WRNum`, `Date`, `Prefix`, `Subfolder` | Written only on the row where the value changes, blank everywhere else - downstream imputes by forward-fill |
-| Target identity (read-only) | Everything else | Displayed when present and non-empty, never edited. `BCN` gets the layout prominence when present - it is the field a mis-tap corrupts invisibly |
+| Target identity (read-only) | Everything else | Displayed when present and non-empty, never edited. `row` and `range` get the layout prominence when present - they are the plan's physical coordinates. `BCN` does not lead: an N30 plan repeats 30 of them across 360 rows |
 
 The identity set varies per project: `WGA5101` has no `treatment`; `WGA-N30` has no
 `plate`, `Q2_pos`, or `order`, adds `ecotype`, and its `tech_rep` is present but
@@ -84,11 +85,13 @@ Rules:
    always the bare integer, in the CSV and on screen - no padding anywhere.
 2. **Event log CSV** - audit trail, one row per action:
    `timestamp,action,file_num,plan_row_index,note`
+   (`timestamp` is the tablet's local time, ISO-8601 with the local offset.)
    (identity fields logged when present). `action` is one of
-   `confirm | discard | white_ref | overwrite | undo | redo | comment | meta | reconcile`.
+   `confirm | discard | white_ref | overwrite | comment | meta | reconcile`.
    This is the bit Excel never gave us: discarded file numbers become data instead of
-   folklore. Append-only, with one exception: Undo removes the entry it reverses
-   (see section 4).
+   folklore. Append-only, with one exception: Undo removes the entry it reverses and
+   parks it on the redo stack; Redo puts it back (see section 4). Undo and Redo are not
+   themselves logged - the log records what happened, not what was reconsidered.
 3. **Session JSON** - full app state, for resume or for moving to another device.
 
 Export mechanism, in order of preference, with fallbacks because old WebViews are bad
@@ -128,18 +131,18 @@ separate "type a number" path outside the reconcile box.
 |---|---|---|---|
 | **Confirm** | +1 | next unfilled row | Only on unfilled rows. Assigns `nextFileNum` to `plan[cursor].FileNum`. Stamps `WRNum` only if `currentWR` changed since the last written row. 300ms debounce against double-taps. |
 | **Overwrite** | +1 | next unfilled row | Only on filled rows (the Confirm button relabels). The row's old `FileNum` goes to the log as a discard note; the row is reassigned the displayed number. |
-| **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. Optional reason. |
-| **White reference** | +1 if `config.wrConsumesFileNumber` else 0 | unchanged | Sets `currentWR`; the next Confirm stamps it into `WRNum`. Triggers the reconcile prompt (section 5). |
-| **Undo** | restore | restore | Reverses the last action exactly, removes its log entry, and pushes it onto `redoStack`. |
-| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly. Any new action clears `redoStack` and disables Redo. |
-| **Next/Last row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
+| **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. One tap, no prompt - anything worth saying about it goes in the note. |
+| **White reference** | to the confirmed number +1, if `config.wrConsumesFileNumber`; else 0 | unchanged | The operator confirms which file number the WR actually is - WRs get re-taken too. Sets `currentWR`; the next Confirm stamps it into `WRNum`. Any numbers skipped on the way are logged as discards. This step **is** the reconcile (section 5). |
+| **Undo** | restore | restore | Reverses the last action exactly, removes its log entries, and pushes the whole lot onto `redoStack`. Leaves no log entry of its own. 300ms debounce against double-taps. |
+| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly, log entries included. Any new action clears `redoStack` and disables Redo. 300ms debounce against double-taps, held apart from Undo's so undo-then-redo is never blocked. |
+| **Next/Prev row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
 | **Jump** | unchanged | to chosen row | Opens the full-screen row list (section 6). |
 | **Comment** | unchanged | unchanged | Free text on the current row. Always quoted in output, newlines preserved. |
-| **Edit meta** | unchanged | unchanged | Set or change `Date`, `Prefix`, `Subfolder`. Written on the current row only; other rows stay blank for downstream imputation. |
+| **Edit meta** | unchanged | unchanged | Set or change `Date`, `Prefix`, `Subfolder`. Written on the current row only; other rows stay blank for downstream imputation. A save that changes nothing is not an action - no undo entry, no log row. |
 
 No "confirm and stay" variant for the tech_rep pairs: the walk order in the plan
 matches the physical sampling pattern, so plain sequential confirms are correct, and
-Next/Last row covers the exceptions.
+Next/Prev row covers the exceptions.
 
 ### Undo/redo must be real stacks
 
@@ -159,18 +162,34 @@ off the instrument and types it into the Reconcile box.
 
 Reconcile is prompted:
 
-- **At every white reference.** WRs are where numbering most often goes sideways, and a
-  WR is the first thing captured before any actual data - catching drift there costs
-  minutes instead of a plate.
+- **At every white reference**, as part of taking it. WRs are where numbering most
+  often goes sideways, and a WR is the first thing captured before any actual data -
+  catching drift there costs minutes instead of a plate. Rather than confirming the WR
+  and then asking a second question, the app asks the only question that matters:
+  which file number is this white reference? Confirming it settles the counter, so
+  there is nothing left to reconcile afterwards. A WR that does not write a file
+  (`wrConsumesFileNumber: false`) has no number to confirm, so it prompts the ordinary
+  reconcile box instead.
 - **Immediately after loading a partly-filled CSV** without session JSON (section 3).
 - **On demand**, by tapping the big `NEXT FILE` display.
 
+There is no separate CHECK step: the verdict and the action button follow the field as
+it is typed, so a different number turns the primary button into the resync action on
+the spot.
+
 Outcomes:
 
-- Match: green tick, log a `reconcile` event, carry on. Two seconds.
-- Mismatch: show the gap explicitly ("instrument says 189, app expects 186 - 3 files
-  unaccounted for") and offer: log the gap as N anonymous discards and resynchronise
-  `nextFileNum` to the entered value, or open the event log to correct it.
+- Match: green tick, a BACK TO WORK button that logs a `reconcile` event and carries
+  on. Two seconds.
+- Mismatch: the gap shows explicitly ("instrument says 189, app expects 186 - 3 files
+  unaccounted for") and the primary button is already the split action: log the gap as
+  N anonymous discards and resynchronise `nextFileNum` to the entered value. A second
+  button records the mismatch without touching the counter.
+
+Resync reuses numbers below the current counter, and that is expected: a row that
+changes `Prefix` or `Subfolder` starts a fresh numbering scope downstream (files
+restart at 0), so the same `FileNum` legitimately recurs under different scopes, and
+the validate duplicate warning (section 9) can be benign across them.
 
 An error caught at the next white reference costs a few scans of uncertainty. The same
 error caught in the QC pipeline three weeks later costs the day.
@@ -196,20 +215,22 @@ Portrait first, landscape supported.
 +------------------------------------------+
 |  next up:  row 5 / range 8  /  Q2Pos C4  |  greyed, one line
 +------------------------------------------+
-| [ LAST ]                      [ NEXT ]   |  cursor nav, >=48dp targets
+| [ PREV ]                      [ NEXT ]   |  cursor nav, >=48dp targets
 +------------------------------------------+
 |                                          |
 |             C O N F I R M                |  ~25% of screen height, thumb zone
 |                                          |
 +------------------------------------------+
-| WR | DISCARD | REDO | NOTE | UNDO        |  secondary row, >=48dp targets
+| WR | DISCARD | NOTE | REDO | UNDO        |  secondary row, >=48dp targets
 +------------------------------------------+
 ```
 
 Notes on the layout:
 
 - The card renders the row's identity fields as key=value lines, whatever they happen
-  to be; empty values are omitted. Same for the "next up" preview line.
+  to be; empty values are omitted. Same for the "next up" preview line. `row` and
+  `range` are lifted out of that block onto the big line; with neither present the
+  first non-empty identity field leads instead.
 - The status strip shows plate and within-plate progress when a `plate` column exists
   (`Plate 2  12/44`), plain global progress otherwise (`156/360`).
 - The "next up" preview line is cheap and catches "am I standing at the right plant"
@@ -217,14 +238,15 @@ Notes on the layout:
 - `NEXT FILE` is deliberately huge so it can be eyeballed against the instrument's own
   display between reconcile prompts. Bare integer, no padding - easier to read at a
   glance.
-- LAST/NEXT move the cursor without touching `nextFileNum` - for skipping a row (or
+- PREV/NEXT move the cursor without touching `nextFileNum` - for skipping a row (or
   several) and coming back. They sit apart from the secondary row so they are never
   confused with Undo.
 - The Confirm button relabels to OVERWRITE when the cursor sits on an already-filled
   row (after a Jump or Last), so re-assigning a row is deliberate, not accidental.
 - Undo sits next to the destructive-ish buttons on purpose. It should be the easiest
   recovery in the app.
-- The `[=]` menu holds Jump, Edit meta, export, and session management.
+- The `[=]` menu holds Jump, Edit meta, export, the dark mode toggle, and session
+  management.
 - No quick-tag comment chips: common comments change from project to project, so the
   keyboard stays.
 
@@ -265,6 +287,10 @@ correct:
   filenames - that is derived downstream too.
 - Initial `Date`, `Prefix`, `Subfolder` - entered at session start, written on the
   first row. Changed mid-session via Edit meta (e.g. at instrument battery swaps).
+- Dark mode (bool) - set on the opening screen or toggled from the menu mid-session.
+  Light is the default, because that is what a glasshouse in full sun needs; the
+  system preference only seeds the first run, and an explicit choice always wins.
+  Stored apart from the session, so Start Fresh does not reset it.
 
 ## 9. Validation
 
@@ -298,7 +324,7 @@ Other constraints:
 1. **M1** - Load CSV, render the target card, Confirm, export plan CSV. This alone
    replaces the spreadsheet. Ship it and use it for one plate before building anything
    else.
-2. **M2** - Autosave + resume, Discard, White reference with reconcile prompt,
+2. **M2** - Autosave + resume, Discard, White reference with its number confirmed,
    Overwrite, Undo/Redo stacks, comments, event log export. (Autosave is early because
    losing a plate to a browser kill is the exact failure mode this app exists to
    prevent.)
@@ -308,15 +334,22 @@ Other constraints:
 
 ## 12. Testing
 
-- Fixtures: all three plan CSVs, because they pin down the genericness:
-  - `WGA300-Day1.csv` (176 rows, 4 plates of 44, non-contiguous `row` values in
-    plate 3, `tech_rep` pairs at the start of each plate, non-numeric `BCN` values
-    `V1` and `V3`).
-  - `WGA5101-Day1.csv` (same shape but no `treatment` column, `Com*` BCNs).
-  - `WGA-N30-Day1.csv` (360 rows, no `plate`/`Q2_pos`/`order`, an `ecotype` column,
+- Fixtures: small synthetic files in `tests/fixtures/`, one per real plan shape, with
+  invented BCNs and site codes so the committed corpus carries no real trial data.
+  The three shapes pin down the genericness:
+  - `plan-a.csv` (WGA300 shape: plates, non-contiguous `row` values, `tech_rep` pairs,
+    non-numeric `BCN` values `V1` and `V3`, CRLF).
+  - `plan-b.csv` (WGA5101 shape: no `treatment` column, `Com*` BCNs, partly empty
+    `tech_rep`, LF).
+  - `plan-c.csv` (N30 shape: no `plate`/`Q2_pos`/`order`, an `ecotype` column,
     `tech_rep` present but entirely empty, `row` resetting at block boundaries).
+  Plus `plan-partial.csv` (resume case) and `plan-odd.csv` (unknown columns, quoted
+  comments with commas, quotes and newlines).
   Together: no behaviour may be keyed on an optional column by name, and do not
   assume `BCN` parses as an integer.
+- The real day files live in `real-data/`, untracked. When that folder is present the
+  harness also loads each file as a smoke test - real row counts, real column sets -
+  and skips silently when it is not.
 - Harness: the no-build constraint applies to the shipped file, not the tests. Structure
   the file so the core logic (CSV parse/serialise + the action state machine) is
   DOM-free and loadable in Node; the golden-file harness lives outside the artifact.

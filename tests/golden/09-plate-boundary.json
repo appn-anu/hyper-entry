@@ -1,0 +1,20 @@
+{
+  "description": "A full walk of both plates. A white reference opens each plate - the first as expected, the second re-taken - and a skipped row is picked up at the end.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["whiteRef"],
+    ["confirm"],
+    ["confirm"],
+    ["next"],
+    ["confirm"],
+    ["whiteRef", 90],
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["jump", 2],
+    ["confirm"]
+  ]
+}

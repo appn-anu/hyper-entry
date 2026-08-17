@@ -1,0 +1,2356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>SVC Field Notes</title>
+<style>
+/*
+  Light background, near-black text: highest contrast under glasshouse sun.
+  Every tap target is at least 48px. Nothing on the main screen scrolls except
+  the target card, so Confirm is always under the thumb.
+
+  Custom properties and clamp() are fine on the build target (current Chrome on
+  Android). Where clamp() appears, a plain fallback is declared first, so an
+  older parser drops the clamp line and keeps a usable size.
+*/
+:root {
+  --bg: #ffffff;
+  --ink: #111418;
+  --muted: #57626e;
+  --line: #c3ccd6;
+  --panel: #eef2f6;
+  --field: #ffffff;
+  --go: #0b6b3a;
+  --go-ink: #ffffff;
+  --overwrite: #8a4b00;
+  --danger: #8c1c13;
+  --wr: #14476b;
+  --focus: #0b6b3a;
+  --ok-bg: #e6f4ea;
+  --bad-bg: #fdecea;
+  --warn-bg: #fff6e5;
+  --scrim: rgba(17, 20, 24, 0.55);
+}
+
+/*
+  Dark mode is an explicit choice, not a guess: the toggle wins, and the system
+  preference only seeds the first run. Light stays the default in sunlight.
+*/
+:root[data-theme="dark"] {
+  --bg: #12161a;
+  --ink: #e9eef3;
+  --muted: #98a5b2;
+  --line: #39434e;
+  --panel: #1b2229;
+  --field: #10151a;
+  --go: #2f9e63;
+  --go-ink: #06120b;
+  --overwrite: #d3902f;
+  --danger: #e2705f;
+  --wr: #6bb3e0;
+  --focus: #2f9e63;
+  --ok-bg: #10291b;
+  --bad-bg: #2c1512;
+  --warn-bg: #2b2110;
+  --scrim: rgba(0, 0, 0, 0.66);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  overflow: hidden;
+  /* No double-tap zoom, no blue flash on tap, no pull-to-refresh mid-plate. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  overscroll-behavior: none;
+}
+
+#app { height: 100%; display: flex; flex-direction: column; }
+
+.screen { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+[hidden] { display: none !important; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 48px;
+  padding: 10px 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:disabled { opacity: 0.4; }
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+input, select {
+  font: inherit;
+  color: inherit;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 48px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+/* ---------------------------------------------------------- start screen */
+
+#screen-start { overflow-y: auto; padding: 16px; }
+#screen-start h1 { font-size: 20px; margin: 4px 0 2px; }
+#screen-start .sub { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+
+.field { margin-bottom: 14px; }
+.field > label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.row-2 { display: flex; flex-wrap: wrap; }
+.row-2 > .field { flex: 1 1 140px; margin-right: 10px; }
+.row-2 > .field:last-child { margin-right: 0; }
+
+.check { display: flex; align-items: center; min-height: 48px; }
+.check input { width: 28px; height: 28px; min-height: 28px; margin-right: 10px; flex: 0 0 auto; }
+.check label { font-size: 15px; }
+
+.primary {
+  background: var(--go);
+  color: var(--go-ink);
+  border-color: var(--go);
+  font-weight: 700;
+  width: 100%;
+  min-height: 56px;
+}
+
+.error {
+  background: var(--bad-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+/* ----------------------------------------------------------- main screen */
+
+#status-strip {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+#status-file { font-weight: 600; color: var(--ink); }
+#status-plate { margin-left: auto; }
+#status-progress { margin-left: 10px; font-variant-numeric: tabular-nums; }
+#btn-menu { margin-left: 8px; min-height: 40px; padding: 6px 12px; }
+
+#next-file {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 8px 10px;
+  text-align: center;
+  width: 100%;
+  background: transparent;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+}
+#next-file .label { font-size: 13px; letter-spacing: 0.12em; color: var(--muted); }
+#next-file-num {
+  font-size: 72px;
+  font-size: clamp(48px, 20vmin, 132px);
+  font-weight: 700;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+#next-file .tap { font-size: 12px; color: var(--muted); }
+
+#card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+#card-lead {
+  font-size: 26px;
+  font-size: clamp(22px, 7vmin, 40px);
+  font-weight: 700;
+  line-height: 1.15;
+}
+#card-lead .k { color: var(--muted); font-weight: 500; }
+#card-fields { margin-top: 6px; font-size: 15px; line-height: 1.5; }
+#card-fields .k { color: var(--muted); }
+#card-wr { margin-top: 6px; font-size: 15px; color: var(--wr); font-weight: 600; }
+#card-comment {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+}
+#card-filled {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--overwrite);
+}
+
+#next-up {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#nav-row { flex: 0 0 auto; display: flex; padding: 6px 8px 0; }
+#nav-row button { flex: 1 1 0; margin-right: 8px; }
+#nav-row button:last-child { margin-right: 0; }
+
+#btn-confirm {
+  flex: 0 0 25%;
+  min-height: 96px;
+  margin: 8px;
+  background: var(--go);
+  color: var(--go-ink);
+  border-color: var(--go);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+#btn-confirm.overwrite {
+  background: var(--overwrite);
+  border-color: var(--overwrite);
+}
+#btn-confirm:disabled { background: var(--panel); color: var(--muted); border-color: var(--line); }
+
+#secondary-row {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: 1px solid var(--line);
+  /* Clear of the gesture bar on phones that have one. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+#secondary-row button {
+  flex: 1 1 0;
+  min-height: 52px;
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 2px;
+}
+#secondary-row button:last-child { border-right: 0; }
+#secondary-row button.wr { color: var(--wr); }
+#secondary-row button.danger { color: var(--danger); }
+#secondary-row button.undo { background: var(--panel); font-weight: 700; }
+#secondary-row button:disabled { color: var(--muted); background: var(--bg); }
+
+/* ---------------------------------------------------------------- resume */
+
+.resume {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.resume-actions { display: flex; margin-top: 10px; }
+.resume-actions button { flex: 1 1 0; margin-right: 8px; }
+.resume-actions button:last-child { margin-right: 0; }
+
+/* ------------------------------------------------------------- reconcile */
+
+.big-input {
+  font-size: 32px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-height: 64px;
+  margin-bottom: 10px;
+}
+.verdict {
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.verdict.ok { background: var(--ok-bg); border: 1px solid var(--go); color: var(--go); }
+.verdict.bad { background: var(--bad-bg); border: 1px solid var(--danger); color: var(--danger); }
+.verdict .detail { font-weight: 400; font-size: 14px; margin-top: 6px; color: var(--ink); }
+
+textarea.note {
+  width: 100%;
+  height: 120px;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+/* ------------------------------------------------------------- jump list */
+
+.jump-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  min-height: 56px;
+}
+.jump-row.filled { background: var(--panel); }
+.jump-row.current { outline: 3px solid var(--go); outline-offset: -3px; }
+/* Fixed to the left edge, always in the same place under the thumb. */
+.jump-row button {
+  flex: 0 0 64px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 56px;
+}
+.jump-info { flex: 1 1 auto; padding: 6px 8px; min-width: 0; }
+.jump-lead { font-size: 15px; font-weight: 700; }
+.jump-fields {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jump-num {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.jump-num.empty { color: var(--muted); font-weight: 400; }
+
+/* ------------------------------------------------------------- warnings */
+
+.warn-list { margin: 0 0 12px; padding: 0; list-style: none; }
+.warn-list li {
+  background: var(--warn-bg);
+  border: 1px solid var(--overwrite);
+  color: var(--overwrite);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.warn-ok {
+  background: var(--ok-bg);
+  border: 1px solid var(--go);
+  color: var(--go);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+/* ----------------------------------------------------------------- sheet */
+
+#sheet {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--scrim);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  z-index: 10;
+}
+#sheet-panel {
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  max-height: 92%;
+  display: flex;
+  flex-direction: column;
+}
+#sheet.full #sheet-panel { max-height: 100%; height: 100%; border-radius: 0; }
+#sheet-head {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+#sheet-title { font-size: 16px; font-weight: 700; }
+#btn-sheet-close { margin-left: auto; min-height: 44px; }
+#sheet-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sheet-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+.sheet-note { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+
+.export-block { margin-bottom: 20px; }
+.export-block h3 { font-size: 15px; margin: 0 0 6px; }
+.export-block a.dl {
+  display: block;
+  text-align: center;
+  background: var(--go);
+  color: var(--go-ink);
+  border-radius: 6px;
+  padding: 14px 10px;
+  font-weight: 700;
+  text-decoration: none;
+  margin-bottom: 8px;
+}
+.export-block a.dl.dead { background: var(--panel); color: var(--muted); }
+.export-block textarea {
+  width: 100%;
+  height: 130px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre;
+}
+
+/* Landscape and short screens: the giant number gives up room first. */
+@media (max-height: 480px) {
+  #next-file-num { font-size: 44px; }
+  #btn-confirm { min-height: 64px; font-size: 22px; }
+}
+</style>
+</head>
+<body>
+
+<noscript>This app needs JavaScript.</noscript>
+
+<div id="app">
+
+  <section id="screen-start" class="screen">
+    <h1>SVC Field Notes</h1>
+    <p class="sub">Load the day's plan CSV, then confirm your way down it.</p>
+
+    <div id="resume-box" class="resume" hidden>
+      <div id="resume-text"></div>
+      <div class="resume-actions">
+        <button id="btn-resume" class="primary">RESUME</button>
+        <button id="btn-fresh">START FRESH</button>
+      </div>
+    </div>
+
+    <div id="start-error" class="error" hidden></div>
+
+    <div class="field">
+      <label for="file-input">Plan CSV</label>
+      <input type="file" id="file-input" accept=".csv,text/csv">
+      <div class="hint" id="file-summary">No file loaded.</div>
+    </div>
+
+    <div class="row-2">
+      <div class="field">
+        <label for="in-date">Date</label>
+        <input type="date" id="in-date">
+      </div>
+      <div class="field">
+        <label for="in-start">First file number</label>
+        <input type="number" id="in-start" inputmode="numeric" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="row-2">
+      <div class="field">
+        <label for="in-prefix">Prefix</label>
+        <input type="text" id="in-prefix" autocapitalize="off" autocorrect="off">
+      </div>
+      <div class="field">
+        <label for="in-subfolder">Subfolder</label>
+        <input type="text" id="in-subfolder" autocapitalize="off" autocorrect="off">
+      </div>
+    </div>
+
+    <div class="field check">
+      <input type="checkbox" id="in-wr-consumes" checked>
+      <label for="in-wr-consumes">A white reference writes its own file</label>
+    </div>
+
+    <div class="field check">
+      <input type="checkbox" id="in-dark">
+      <label for="in-dark">Dark mode</label>
+    </div>
+
+    <button id="btn-start" class="primary" disabled>START SESSION</button>
+
+    <div class="field" style="margin-top:18px">
+      <label for="session-input">Or pick up a session file from another device</label>
+      <input type="file" id="session-input" accept=".json,application/json">
+    </div>
+  </section>
+
+  <section id="screen-main" class="screen" hidden>
+    <div id="status-strip">
+      <span id="status-file"></span>
+      <span id="status-plate"></span>
+      <span id="status-progress"></span>
+      <button id="btn-menu" title="Menu">&#9776;</button>
+    </div>
+
+    <button id="next-file">
+      <div class="label">NEXT FILE</div>
+      <div id="next-file-num">0</div>
+      <div class="tap">tap to reconcile</div>
+    </button>
+
+    <div id="card">
+      <div id="card-lead"></div>
+      <div id="card-fields"></div>
+      <div id="card-wr" hidden></div>
+      <div id="card-filled" hidden></div>
+      <div id="card-comment" hidden></div>
+    </div>
+
+    <div id="next-up"></div>
+
+    <div id="nav-row">
+      <button id="btn-prev">PREV</button>
+      <button id="btn-next">NEXT</button>
+    </div>
+
+    <button id="btn-confirm">CONFIRM</button>
+
+    <div id="secondary-row">
+      <button id="btn-wr" class="wr">WR</button>
+      <button id="btn-discard" class="danger">DISCARD</button>
+      <button id="btn-note">NOTE</button>
+      <button id="btn-redo">REDO</button>
+      <button id="btn-undo" class="undo">UNDO</button>
+    </div>
+  </section>
+
+  <div id="sheet" hidden>
+    <div id="sheet-panel">
+      <div id="sheet-head">
+        <span id="sheet-title"></span>
+        <button id="btn-sheet-close">CLOSE</button>
+      </div>
+      <div id="sheet-body"></div>
+    </div>
+  </div>
+
+</div>
+
+<!--
+  Core: CSV parse/serialise + the action state machine.
+
+  This script must stay DOM-free. tests/run.js pulls it out of this file by its
+  id and evaluates it in Node, so the tests exercise the exact bytes that ship.
+  Nothing in here may touch window, document, localStorage or Date-formatting
+  locales; the UI script below owns all of that.
+-->
+<script id="core">
+(function (root, factory) {
+  var api = factory();
+  if (typeof module === 'object' && module.exports) { module.exports = api; }
+  if (root) { root.SVCCore = api; }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  // Columns the app writes on every captured row.
+  var CAPTURE_COLS = ['FileNum', 'comments'];
+  // Columns written only where the value changes; downstream forward-fills them.
+  var TRACKED_COLS = ['WRNum', 'Date', 'Prefix', 'Subfolder'];
+  // Without these there is nothing to fill, nothing to file it under, and no
+  // place for a note to land on the exported plan.
+  var REQUIRED_COLS = ['FileNum', 'Date', 'Prefix', 'Subfolder', 'comments'];
+
+  var DEFAULT_CONFIG = {
+    wrConsumesFileNumber: true,
+    startFileNum: 0,
+    undoDepth: 20
+  };
+
+  var SESSION_VERSION = 1;
+
+  // ---------------------------------------------------------------- CSV ----
+
+  // Real CSV: quoted fields, embedded commas, embedded newlines, "" escapes.
+  // Returns { header, rows, eol, trailingNewline }. Rows are plain objects
+  // keyed by header name; cells past the end of the header are kept verbatim
+  // on __extra so a hand-edited file round-trips without losing anything.
+  function parseCSV(text) {
+    if (typeof text !== 'string') { throw new Error('parseCSV needs a string'); }
+    if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); }
+
+    var eol = text.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+    var trailingNewline = /[\r\n]$/.test(text);
+
+    var records = [];
+    var field = '';
+    var record = [];
+    var inQuotes = false;
+    var started = false; // distinguishes a real empty field from "no field yet"
+    var i = 0;
+    var n = text.length;
+
+    function endField() { record.push(field); field = ''; started = false; }
+    function endRecord() { endField(); records.push(record); record = []; }
+
+    while (i < n) {
+      var c = text.charAt(i);
+      if (inQuotes) {
+        if (c === '"') {
+          if (text.charAt(i + 1) === '"') { field += '"'; i += 2; continue; }
+          inQuotes = false; i += 1; continue;
+        }
+        field += c; i += 1; continue;
+      }
+      if (c === '"') { inQuotes = true; started = true; i += 1; continue; }
+      if (c === ',') { endField(); started = true; i += 1; continue; }
+      if (c === '\r' && text.charAt(i + 1) === '\n') { endRecord(); i += 2; continue; }
+      if (c === '\n' || c === '\r') { endRecord(); i += 1; continue; }
+      field += c; started = true; i += 1;
+    }
+    if (started || field !== '' || record.length) { endRecord(); }
+
+    // Drop blank lines (a lone empty field), but never the header.
+    records = records.filter(function (r, idx) {
+      return idx === 0 || !(r.length === 1 && r[0] === '');
+    });
+
+    if (!records.length) { return { header: [], rows: [], eol: eol, trailingNewline: trailingNewline }; }
+
+    var header = records[0].map(function (h) { return h.trim(); });
+    var rows = records.slice(1).map(function (cells) {
+      var row = {};
+      for (var j = 0; j < header.length; j++) {
+        row[header[j]] = j < cells.length ? cells[j] : '';
+      }
+      if (cells.length > header.length) { row.__extra = cells.slice(header.length); }
+      return row;
+    });
+
+    return { header: header, rows: rows, eol: eol, trailingNewline: trailingNewline };
+  }
+
+  function quoteField(value, force) {
+    var s = value == null ? '' : String(value);
+    // An empty cell is never quoted, even in a force-quoted column: writing ""
+    // into every uncaptured comment would change bytes on rows the operator
+    // never touched, and an untouched plan has to come back out as it went in.
+    if (s === '') { return ''; }
+    var needs = force || /[",\r\n]/.test(s) || /^\s/.test(s) || /\s$/.test(s);
+    if (!needs) { return s; }
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
+  // opts: { eol, trailingNewline, alwaysQuote: [colName, ...] }
+  function serializeCSV(header, rows, opts) {
+    opts = opts || {};
+    var eol = opts.eol || '\r\n';
+    var alwaysQuote = opts.alwaysQuote || [];
+    var lines = [header.map(function (h) { return quoteField(h, false); }).join(',')];
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var cells = [];
+      for (var j = 0; j < header.length; j++) {
+        var col = header[j];
+        cells.push(quoteField(row[col], alwaysQuote.indexOf(col) !== -1));
+      }
+      if (row.__extra) {
+        for (var k = 0; k < row.__extra.length; k++) { cells.push(quoteField(row.__extra[k], false)); }
+      }
+      lines.push(cells.join(','));
+    }
+
+    var out = lines.join(eol);
+    if (opts.trailingNewline !== false) { out += eol; }
+    return out;
+  }
+
+  // ------------------------------------------------------------ helpers ----
+
+  function isBlank(v) { return v == null || String(v).trim() === ''; }
+
+  function identityCols(header) {
+    return header.filter(function (col) {
+      return CAPTURE_COLS.indexOf(col) === -1 && TRACKED_COLS.indexOf(col) === -1;
+    });
+  }
+
+  function missingRequired(header) {
+    return REQUIRED_COLS.filter(function (col) { return header.indexOf(col) === -1; });
+  }
+
+  function toFileNum(v) {
+    if (isBlank(v)) { return null; }
+    var s = String(v).trim();
+    if (!/^-?\d+$/.test(s)) { return null; }
+    return parseInt(s, 10);
+  }
+
+  // The value downstream forward-fill would impute at rowIndex: the nearest
+  // non-empty value strictly above it. Scanning beats caching because the
+  // cursor moves backwards (jump, overwrite) and undo rewrites history.
+  function effectiveValue(state, col, rowIndex) {
+    for (var i = rowIndex - 1; i >= 0; i--) {
+      var v = state.plan[i][col];
+      if (!isBlank(v)) { return String(v); }
+    }
+    return '';
+  }
+
+  function nextUnfilled(state, from) {
+    for (var i = from; i < state.plan.length; i++) {
+      if (isBlank(state.plan[i].FileNum)) { return i; }
+    }
+    return -1;
+  }
+
+  function firstUnfilled(state) {
+    var i = nextUnfilled(state, 0);
+    return i === -1 ? Math.max(0, state.plan.length - 1) : i;
+  }
+
+  function highestFileNum(rows) {
+    var max = null;
+    for (var i = 0; i < rows.length; i++) {
+      var v = toFileNum(rows[i].FileNum);
+      if (v !== null && (max === null || v > max)) { max = v; }
+    }
+    return max;
+  }
+
+  function countFilled(rows) {
+    var n = 0;
+    for (var i = 0; i < rows.length; i++) { if (!isBlank(rows[i].FileNum)) { n++; } }
+    return n;
+  }
+
+  // ------------------------------------------------------------ session ----
+
+  // opts: { fileName, parsed, config, meta, now }
+  function createSession(opts) {
+    var parsed = opts.parsed;
+    var missing = missingRequired(parsed.header);
+    if (missing.length) {
+      var err = new Error('Missing required column(s): ' + missing.join(', '));
+      err.code = 'MISSING_COLUMNS';
+      err.missing = missing;
+      throw err;
+    }
+
+    if (!parsed.rows.length) {
+      // A valid header with nothing under it would start a live session where
+      // Discard burns numbers against no rows at all.
+      var err = new Error('The plan has no data rows - nothing to fill.');
+      err.code = 'EMPTY_PLAN';
+      throw err;
+    }
+
+    var config = Object.assign({}, DEFAULT_CONFIG, opts.config || {});
+    var plan = parsed.rows;
+    var maxFilled = highestFileNum(plan);
+    var partlyFilled = countFilled(plan) > 0;
+
+    var state = {
+      version: SESSION_VERSION,
+      fileName: opts.fileName || 'plan.csv',
+      header: parsed.header.slice(),
+      plan: plan,
+      eol: parsed.eol || '\r\n',
+      trailingNewline: parsed.trailingNewline !== false,
+      cursor: 0,
+      nextFileNum: maxFilled === null ? config.startFileNum : maxFilled + 1,
+      currentWR: null,
+      meta: Object.assign({ Date: '', Prefix: '', Subfolder: '' }, opts.meta || {}),
+      config: config,
+      undoStack: [],
+      redoStack: [],
+      events: [],
+      eventSeq: 0,
+      // A partly-filled CSV hides trailing discards and WRs from the earlier
+      // session, so the counter is a guess until the operator checks it.
+      needsReconcile: partlyFilled,
+      startedAt: opts.now || nowLocal()
+    };
+
+    state.cursor = firstUnfilled(state);
+
+    // Pick up the tracked values already standing above the cursor, so the
+    // first confirm does not rewrite what the file already says.
+    for (var t = 0; t < TRACKED_COLS.length; t++) {
+      var col = TRACKED_COLS[t];
+      var standing = effectiveValue(state, col, state.cursor);
+      if (col === 'WRNum') {
+        var wr = toFileNum(standing);
+        if (wr !== null) { state.currentWR = wr; }
+      } else if (standing !== '' && isBlank(state.meta[col])) {
+        state.meta[col] = standing;
+      }
+    }
+
+    return state;
+  }
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  // Local time, ISO-8601 with the local offset: the event log reads in the
+  // same clock the operator's day runs on. Manual formatting, no locales.
+  function nowLocal() {
+    var d = new Date();
+    var off = -d.getTimezoneOffset();
+    var sign = off < 0 ? '-' : '+';
+    off = Math.abs(off);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+      'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) +
+      sign + pad2(Math.floor(off / 60)) + ':' + pad2(off % 60);
+  }
+
+  // ------------------------------------------------------------- events ----
+
+  function makeEvent(state, action, fields) {
+    state.eventSeq += 1;
+    var ev = {
+      id: state.eventSeq,
+      timestamp: fields.timestamp || nowLocal(),
+      action: action,
+      file_num: fields.file_num == null ? '' : String(fields.file_num),
+      plan_row_index: fields.plan_row_index == null ? '' : String(fields.plan_row_index),
+      note: fields.note || '',
+      identity: {}
+    };
+    var rowIndex = fields.plan_row_index;
+    if (typeof rowIndex === 'number' && state.plan[rowIndex]) {
+      var cols = identityCols(state.header);
+      for (var i = 0; i < cols.length; i++) {
+        var v = state.plan[rowIndex][cols[i]];
+        if (!isBlank(v)) { ev.identity[cols[i]] = String(v); }
+      }
+    }
+    return ev;
+  }
+
+  // ------------------------------------------------------ action plumbing ----
+
+  // Every mutating action runs inside a transaction so undo/redo get an exact,
+  // compact patch: scalars before/after plus only the cells actually touched.
+  function transact(state, type, body) {
+    var tx = {
+      type: type,
+      before: snapshotScalars(state),
+      cellsBefore: {},
+      cellsAfter: {},
+      events: []
+    };
+
+    var ctx = {
+      setCell: function (rowIndex, col, value) {
+        var row = state.plan[rowIndex];
+        if (!row) { return; }
+        var key = rowIndex + '|' + col;
+        if (!(key in tx.cellsBefore)) { tx.cellsBefore[key] = row[col] == null ? '' : String(row[col]); }
+        row[col] = value;
+        tx.cellsAfter[key] = value;
+      },
+      log: function (action, fields) {
+        var ev = makeEvent(state, action, fields || {});
+        state.events.push(ev);
+        tx.events.push(ev);
+        return ev;
+      }
+    };
+
+    var result = body(ctx);
+    tx.after = snapshotScalars(state);
+
+    state.undoStack.push(tx);
+    while (state.undoStack.length > state.config.undoDepth) { state.undoStack.shift(); }
+    state.redoStack = [];
+
+    return { tx: tx, result: result };
+  }
+
+  function snapshotScalars(state) {
+    return {
+      cursor: state.cursor,
+      nextFileNum: state.nextFileNum,
+      currentWR: state.currentWR,
+      meta: Object.assign({}, state.meta),
+      needsReconcile: state.needsReconcile
+    };
+  }
+
+  function restoreScalars(state, snap) {
+    state.cursor = snap.cursor;
+    state.nextFileNum = snap.nextFileNum;
+    state.currentWR = snap.currentWR;
+    state.meta = Object.assign({}, snap.meta);
+    state.needsReconcile = snap.needsReconcile;
+  }
+
+  function applyCells(state, cells) {
+    for (var key in cells) {
+      if (!Object.prototype.hasOwnProperty.call(cells, key)) { continue; }
+      var split = key.indexOf('|');
+      var rowIndex = parseInt(key.slice(0, split), 10);
+      var col = key.slice(split + 1);
+      if (state.plan[rowIndex]) { state.plan[rowIndex][col] = cells[key]; }
+    }
+  }
+
+  // What forward-fill currently imputes for the rows below this one: the row's
+  // own value if it has one, otherwise the nearest value above it.
+  function standingValue(state, col, rowIndex) {
+    var own = state.plan[rowIndex][col];
+    if (!isBlank(own)) { return String(own); }
+    return effectiveValue(state, col, rowIndex);
+  }
+
+  // Writing a tracked value onto a row that has already-captured rows beneath
+  // it changes what forward-fill imputes for them. Close the region: put the
+  // old value back on the very next row, so those rows keep the value they
+  // were actually captured under.
+  //
+  // This only fires on back-fill - jumping to a skipped row, or overwriting.
+  // Walking forward there is nothing captured below to protect, so the output
+  // stays as sparse as the spec asks for.
+  function preserveBelow(state, ctx, rowIndex, col, oldValue) {
+    if (oldValue === '') { return; }
+    var next = rowIndex + 1;
+    if (next >= state.plan.length) { return; }
+    if (!isBlank(state.plan[next][col])) { return; } // region already closed
+    for (var i = next; i < state.plan.length; i++) {
+      if (!isBlank(state.plan[i][col])) { return; }  // the next explicit value closes it
+      if (!isBlank(state.plan[i].FileNum)) {         // a captured row relies on oldValue
+        ctx.setCell(next, col, oldValue);
+        return;
+      }
+    }
+  }
+
+  // Stamp the change-tracked columns onto a row, but only where the value
+  // differs from what forward-fill would already put there.
+  function stampTracked(state, ctx, rowIndex) {
+    for (var i = 0; i < TRACKED_COLS.length; i++) {
+      var col = TRACKED_COLS[i];
+      if (state.header.indexOf(col) === -1) { continue; }
+      var desired;
+      if (col === 'WRNum') {
+        desired = state.currentWR == null ? '' : String(state.currentWR);
+      } else {
+        desired = isBlank(state.meta[col]) ? '' : String(state.meta[col]);
+      }
+      if (desired === '') { continue; }
+      var standing = standingValue(state, col, rowIndex);
+      if (desired === standing) { continue; }
+      ctx.setCell(rowIndex, col, desired);
+      preserveBelow(state, ctx, rowIndex, col, standing);
+    }
+  }
+
+  function advanceCursor(state) {
+    var next = nextUnfilled(state, state.cursor + 1);
+    if (next !== -1) { state.cursor = next; }
+    else { state.cursor = Math.max(0, state.plan.length - 1); }
+  }
+
+  // ------------------------------------------------------------ actions ----
+
+  function isFilled(state, rowIndex) {
+    var row = state.plan[rowIndex];
+    return !!row && !isBlank(row.FileNum);
+  }
+
+  // Assign the displayed nextFileNum to the current row. Unfilled rows only -
+  // the UI relabels the button to OVERWRITE on filled ones.
+  function confirm(state) {
+    if (!state.plan.length) { return null; }
+    if (isFilled(state, state.cursor)) {
+      var err = new Error('Row already has a FileNum - use overwrite');
+      err.code = 'ROW_FILLED';
+      throw err;
+    }
+    return transact(state, 'confirm', function (ctx) {
+      var rowIndex = state.cursor;
+      var num = state.nextFileNum;
+      ctx.setCell(rowIndex, 'FileNum', String(num));
+      stampTracked(state, ctx, rowIndex);
+      state.nextFileNum = num + 1;
+      ctx.log('confirm', { file_num: num, plan_row_index: rowIndex });
+      advanceCursor(state);
+      return num;
+    });
+  }
+
+  // Reassign a row that already holds a number. The number it held is logged
+  // as discarded, because on the instrument that file still exists.
+  function overwrite(state) {
+    if (!state.plan.length) { return null; }
+    if (!isFilled(state, state.cursor)) {
+      var err = new Error('Row is empty - use confirm');
+      err.code = 'ROW_EMPTY';
+      throw err;
+    }
+    return transact(state, 'overwrite', function (ctx) {
+      var rowIndex = state.cursor;
+      var old = String(state.plan[rowIndex].FileNum);
+      var num = state.nextFileNum;
+      ctx.setCell(rowIndex, 'FileNum', String(num));
+      stampTracked(state, ctx, rowIndex);
+      state.nextFileNum = num + 1;
+      ctx.log('overwrite', {
+        file_num: num,
+        plan_row_index: rowIndex,
+        note: 'discarded ' + old
+      });
+      advanceCursor(state);
+      return num;
+    });
+  }
+
+  // The instrument wrote a file but it is junk. Burn the number, stay put.
+  function discard(state, reason) {
+    return transact(state, 'discard', function (ctx) {
+      var num = state.nextFileNum;
+      state.nextFileNum = num + 1;
+      ctx.log('discard', {
+        file_num: num,
+        plan_row_index: state.cursor,
+        note: reason || ''
+      });
+      return num;
+    });
+  }
+
+  // White reference. Consumes a file number in the current SVC workflow;
+  // config.wrConsumesFileNumber turns that off for SVCScan.
+  //
+  // fileNum is the number the operator has confirmed the WR actually is -
+  // white references get re-taken like any other scan, so it is not always the
+  // number the app expected. Confirming it here IS the reconcile: anything
+  // skipped on the way is logged as discards, exactly as the reconcile box
+  // would, and nothing needs to ask again afterwards. Omit it to accept the
+  // number the app expects.
+  function whiteRef(state, fileNum) {
+    return transact(state, 'white_ref', function (ctx) {
+      if (!state.config.wrConsumesFileNumber) {
+        // SVCScan: the reference writes no file, so there is no number to
+        // confirm and the counter does not move.
+        ctx.log('white_ref', {
+          plan_row_index: state.cursor,
+          note: 'no file written'
+        });
+        return null;
+      }
+
+      var expected = state.nextFileNum;
+      var num = (fileNum === undefined || fileNum === null) ? expected : fileNum;
+      var note = '';
+
+      if (num > expected) {
+        // Files exist between what the app expected and the WR the operator is
+        // looking at. Same treatment as a reconcile gap: they become data.
+        for (var skipped = expected; skipped < num; skipped++) {
+          ctx.log('discard', {
+            file_num: skipped,
+            plan_row_index: state.cursor,
+            note: 'unaccounted at white reference'
+          });
+        }
+        note = (num - expected) + ' unaccounted before this WR';
+      } else if (num < expected) {
+        note = 'app was ahead by ' + (expected - num);
+      }
+
+      state.currentWR = num;
+      state.nextFileNum = num + 1;
+      state.needsReconcile = false;
+
+      ctx.log('white_ref', {
+        file_num: num,
+        plan_row_index: state.cursor,
+        note: note
+      });
+      return num;
+    });
+  }
+
+  function setComment(state, text) {
+    return transact(state, 'comment', function (ctx) {
+      var rowIndex = state.cursor;
+      ctx.setCell(rowIndex, 'comments', text == null ? '' : String(text));
+      ctx.log('comment', {
+        plan_row_index: rowIndex,
+        file_num: toFileNum(state.plan[rowIndex].FileNum),
+        note: text == null ? '' : String(text)
+      });
+      return text;
+    });
+  }
+
+  // Date / Prefix / Subfolder. Lands on the current row only; every other row
+  // stays blank for downstream forward-fill. A save that changes nothing is
+  // not an action: no transaction, no undo entry, no log row.
+  function setMeta(state, meta) {
+    var changed = [];
+    for (var i = 0; i < TRACKED_COLS.length; i++) {
+      var col = TRACKED_COLS[i];
+      if (col === 'WRNum') { continue; }
+      if (!Object.prototype.hasOwnProperty.call(meta, col)) { continue; }
+      var value = meta[col] == null ? '' : String(meta[col]);
+      if (value === state.meta[col]) { continue; }
+      changed.push(col);
+    }
+    if (!changed.length) { return null; }
+
+    return transact(state, 'meta', function (ctx) {
+      var note = [];
+      for (var j = 0; j < changed.length; j++) {
+        var col = changed[j];
+        state.meta[col] = meta[col] == null ? '' : String(meta[col]);
+        note.push(col + '=' + state.meta[col]);
+      }
+      stampTracked(state, ctx, state.cursor);
+      ctx.log('meta', {
+        plan_row_index: state.cursor,
+        note: note.join('; ')
+      });
+      return changed;
+    });
+  }
+
+  // ------------------------------------------------------- reconciliation ----
+
+  // What the operator would see before deciding. actual = the next file number
+  // read off the instrument.
+  function reconcileCheck(state, actual) {
+    var expected = state.nextFileNum;
+    var gap = actual - expected;
+    return {
+      expected: expected,
+      actual: actual,
+      gap: gap,
+      match: gap === 0,
+      // gap > 0: files exist that no row claims. gap < 0: the app counted
+      // ahead of the instrument, so something was logged that never happened.
+      kind: gap === 0 ? 'match' : (gap > 0 ? 'unaccounted' : 'app_ahead')
+    };
+  }
+
+  // choice: 'accept' (log the gap and resync) or 'note' (record the mismatch
+  // and leave the counter alone, for correcting via the event log instead).
+  function reconcile(state, actual, choice) {
+    var check = reconcileCheck(state, actual);
+    return transact(state, 'reconcile', function (ctx) {
+      state.needsReconcile = false;
+
+      if (check.match) {
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'match'
+        });
+        return check;
+      }
+
+      if (choice === 'accept') {
+        if (check.gap > 0) {
+          // Each unaccounted number becomes a discard, so the log still
+          // explains every file the instrument holds.
+          for (var num = check.expected; num < actual; num++) {
+            ctx.log('discard', {
+              file_num: num,
+              plan_row_index: state.cursor,
+              note: 'unaccounted at reconcile'
+            });
+          }
+        }
+        state.nextFileNum = actual;
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'resync ' + check.expected + ' -> ' + actual +
+                (check.gap > 0 ? ' (' + check.gap + ' unaccounted)' : ' (app was ahead by ' + (-check.gap) + ')')
+        });
+      } else {
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'mismatch noted: instrument ' + actual + ', app ' + check.expected + ' (not resynced)'
+        });
+      }
+      return check;
+    });
+  }
+
+  // ---------------------------------------------------------- undo / redo ----
+
+  function canUndo(state) { return state.undoStack.length > 0; }
+  function canRedo(state) { return state.redoStack.length > 0; }
+
+  function removeEvents(state, events) {
+    if (!events.length) { return; }
+    var ids = {};
+    for (var i = 0; i < events.length; i++) { ids[events[i].id] = true; }
+    state.events = state.events.filter(function (ev) { return !ids[ev.id]; });
+  }
+
+  // Reverses the last action exactly, log entries included. The removed
+  // entries ride along on the transaction, so the log never carries a trace of
+  // an action that was taken back - an undone confirm leaves no confirm.
+  function undo(state) {
+    if (!canUndo(state)) { return null; }
+    var tx = state.undoStack.pop();
+    applyCells(state, tx.cellsBefore);
+    restoreScalars(state, tx.before);
+    removeEvents(state, tx.events);
+    state.redoStack.push(tx);
+    return tx;
+  }
+
+  // Re-applies the top of the redo stack exactly, putting its log entries back
+  // where they were.
+  function redo(state) {
+    if (!canRedo(state)) { return null; }
+    var tx = state.redoStack.pop();
+    applyCells(state, tx.cellsAfter);
+    restoreScalars(state, tx.after);
+    for (var i = 0; i < tx.events.length; i++) { state.events.push(tx.events[i]); }
+    state.undoStack.push(tx);
+    while (state.undoStack.length > state.config.undoDepth) { state.undoStack.shift(); }
+    return tx;
+  }
+
+  // --------------------------------------------------------- navigation ----
+
+  // Cursor only: no file numbers move, nothing is logged, nothing lands on the
+  // undo stack. Skipping a row and coming back is not an edit.
+  function moveCursor(state, delta) {
+    var target = state.cursor + delta;
+    if (target < 0) { target = 0; }
+    if (target > state.plan.length - 1) { target = Math.max(0, state.plan.length - 1); }
+    state.cursor = target;
+    return state.cursor;
+  }
+
+  function jumpTo(state, rowIndex) {
+    if (rowIndex < 0 || rowIndex >= state.plan.length) { return state.cursor; }
+    state.cursor = rowIndex;
+    return state.cursor;
+  }
+
+  // ---------------------------------------------------------- validation ----
+
+  // Warn, never block. The operator is in a glasshouse and knows things the
+  // app does not.
+  function validate(state) {
+    var warnings = [];
+    var seen = {};
+    var duplicates = {};
+    var blanks = [];
+    var prev = null;
+    var nonMonotonic = [];
+
+    for (var i = 0; i < state.plan.length; i++) {
+      var raw = state.plan[i].FileNum;
+      if (isBlank(raw)) { blanks.push(i); continue; }
+      var num = toFileNum(raw);
+      var key = String(raw).trim();
+      if (seen[key] !== undefined) {
+        if (!duplicates[key]) { duplicates[key] = [seen[key]]; }
+        duplicates[key].push(i);
+      } else {
+        seen[key] = i;
+      }
+      if (num !== null) {
+        if (prev !== null && num <= prev) { nonMonotonic.push(i); }
+        prev = num;
+      }
+    }
+
+    var dupKeys = Object.keys(duplicates);
+    if (dupKeys.length) {
+      warnings.push({
+        code: 'duplicate_file_num',
+        message: 'Duplicate FileNum: ' + dupKeys.map(function (k) {
+          return k + ' (rows ' + duplicates[k].map(function (r) { return r + 1; }).join(', ') + ')';
+        }).join('; '),
+        rows: dupKeys.reduce(function (acc, k) { return acc.concat(duplicates[k]); }, [])
+      });
+    }
+
+    if (nonMonotonic.length) {
+      warnings.push({
+        code: 'non_monotonic',
+        message: 'FileNum goes backwards at ' + nonMonotonic.length + ' row(s)',
+        rows: nonMonotonic
+      });
+    }
+
+    if (blanks.length) {
+      warnings.push({
+        code: 'blank_file_num',
+        message: blanks.length + ' row(s) have no FileNum',
+        rows: blanks
+      });
+    }
+
+    if (state.header.indexOf('plate') !== -1) {
+      var counts = {};
+      var order = [];
+      for (var p = 0; p < state.plan.length; p++) {
+        var plate = String(state.plan[p].plate || '');
+        if (counts[plate] === undefined) { counts[plate] = 0; order.push(plate); }
+        counts[plate] += 1;
+      }
+      var modal = modeOf(order.map(function (k) { return counts[k]; }));
+      var odd = order.filter(function (k) { return counts[k] !== modal; });
+      if (odd.length && order.length > 1) {
+        warnings.push({
+          code: 'plate_row_count',
+          message: 'Plate row count differs from the usual ' + modal + ': ' +
+            odd.map(function (k) { return (k || '(blank)') + '=' + counts[k]; }).join(', '),
+          rows: []
+        });
+      }
+    }
+
+    var unsetMeta = ['Date', 'Prefix', 'Subfolder'].filter(function (col) {
+      if (state.header.indexOf(col) === -1) { return false; }
+      for (var i = 0; i < state.plan.length; i++) {
+        if (!isBlank(state.plan[i][col])) { return false; }
+      }
+      return true;
+    });
+    if (unsetMeta.length) {
+      warnings.push({
+        code: 'meta_never_set',
+        message: 'Never set: ' + unsetMeta.join(', '),
+        rows: []
+      });
+    }
+
+    return warnings;
+  }
+
+  function modeOf(values) {
+    var tally = {};
+    var best = null;
+    var bestCount = 0;
+    for (var i = 0; i < values.length; i++) {
+      var v = values[i];
+      tally[v] = (tally[v] || 0) + 1;
+      if (tally[v] > bestCount) { bestCount = tally[v]; best = v; }
+    }
+    return best;
+  }
+
+  // -------------------------------------------------------------- export ----
+
+  function exportPlanCSV(state) {
+    return serializeCSV(state.header, state.plan, {
+      eol: state.eol,
+      trailingNewline: state.trailingNewline,
+      alwaysQuote: ['comments']
+    });
+  }
+
+  function eventLogHeader(state) {
+    return ['timestamp', 'action', 'file_num', 'plan_row_index', 'note'].concat(identityCols(state.header));
+  }
+
+  function exportEventsCSV(state) {
+    var header = eventLogHeader(state);
+    var idCols = identityCols(state.header);
+    var rows = state.events.map(function (ev) {
+      var row = {
+        timestamp: ev.timestamp,
+        action: ev.action,
+        file_num: ev.file_num,
+        plan_row_index: ev.plan_row_index,
+        note: ev.note
+      };
+      for (var i = 0; i < idCols.length; i++) {
+        row[idCols[i]] = ev.identity[idCols[i]] || '';
+      }
+      return row;
+    });
+    return serializeCSV(header, rows, {
+      eol: state.eol,
+      trailingNewline: state.trailingNewline,
+      alwaysQuote: ['note']
+    });
+  }
+
+  function exportSessionJSON(state) {
+    return JSON.stringify(state, null, 2);
+  }
+
+  function importSessionJSON(text) {
+    var parsed = JSON.parse(text);
+    if (!parsed || parsed.version !== SESSION_VERSION) {
+      var err = new Error('Unsupported session version: ' + (parsed && parsed.version));
+      err.code = 'BAD_SESSION';
+      throw err;
+    }
+    parsed.config = Object.assign({}, DEFAULT_CONFIG, parsed.config || {});
+    parsed.undoStack = parsed.undoStack || [];
+    parsed.redoStack = parsed.redoStack || [];
+    parsed.events = parsed.events || [];
+    return parsed;
+  }
+
+  // --------------------------------------------------------- view helpers ----
+
+  // Progress within the current plate when a plate column exists, global
+  // otherwise. Nothing else is keyed on the plate column.
+  function progress(state) {
+    var hasPlate = state.header.indexOf('plate') !== -1;
+    if (hasPlate) {
+      var plate = String(state.plan[state.cursor] ? (state.plan[state.cursor].plate || '') : '');
+      var total = 0;
+      var done = 0;
+      for (var i = 0; i < state.plan.length; i++) {
+        if (String(state.plan[i].plate || '') !== plate) { continue; }
+        total += 1;
+        if (!isBlank(state.plan[i].FileNum)) { done += 1; }
+      }
+      return { label: plate, done: done, total: total, scoped: true };
+    }
+    return { label: '', done: countFilled(state.plan), total: state.plan.length, scoped: false };
+  }
+
+  // Identity fields of a row, in file order, empties omitted. `row` and
+  // `range` are pulled out for the big line on the card: they are the plan's
+  // physical coordinates, the thing the operator is standing in front of, and
+  // every plan shape has them. BCN does not lead - an N30 plan repeats 30 of
+  // them across 360 rows, so it identifies nothing on its own.
+  //
+  // This is the only place a column name affects anything, and it degrades:
+  // with neither column present the first non-empty identity field leads.
+  var LEAD_COLS = ['row', 'range'];
+
+  function rowIdentity(state, rowIndex) {
+    var row = state.plan[rowIndex];
+    if (!row) { return { lead: [], fields: [] }; }
+    var cols = identityCols(state.header);
+    var lead = [];
+    var fields = [];
+    for (var i = 0; i < cols.length; i++) {
+      var col = cols[i];
+      if (isBlank(row[col])) { continue; }
+      var pair = { key: col, value: String(row[col]) };
+      if (LEAD_COLS.indexOf(col) !== -1) { lead.push(pair); } else { fields.push(pair); }
+    }
+    // LEAD_COLS order rather than file order, so the line always reads
+    // "row N  range M".
+    lead.sort(function (a, b) { return LEAD_COLS.indexOf(a.key) - LEAD_COLS.indexOf(b.key); });
+    if (!lead.length && fields.length) { lead = [fields.shift()]; }
+    return { lead: lead, fields: fields };
+  }
+
+  return {
+    CAPTURE_COLS: CAPTURE_COLS,
+    TRACKED_COLS: TRACKED_COLS,
+    REQUIRED_COLS: REQUIRED_COLS,
+    DEFAULT_CONFIG: DEFAULT_CONFIG,
+    SESSION_VERSION: SESSION_VERSION,
+
+    parseCSV: parseCSV,
+    serializeCSV: serializeCSV,
+    quoteField: quoteField,
+
+    createSession: createSession,
+    identityCols: identityCols,
+    missingRequired: missingRequired,
+    effectiveValue: effectiveValue,
+    isBlank: isBlank,
+    toFileNum: toFileNum,
+    isFilled: isFilled,
+    nextUnfilled: nextUnfilled,
+
+    confirm: confirm,
+    overwrite: overwrite,
+    discard: discard,
+    whiteRef: whiteRef,
+    setComment: setComment,
+    setMeta: setMeta,
+    reconcileCheck: reconcileCheck,
+    reconcile: reconcile,
+    undo: undo,
+    redo: redo,
+    canUndo: canUndo,
+    canRedo: canRedo,
+    moveCursor: moveCursor,
+    jumpTo: jumpTo,
+
+    validate: validate,
+    exportPlanCSV: exportPlanCSV,
+    exportEventsCSV: exportEventsCSV,
+    eventLogHeader: eventLogHeader,
+    exportSessionJSON: exportSessionJSON,
+    importSessionJSON: importSessionJSON,
+
+    progress: progress,
+    rowIdentity: rowIdentity
+  };
+});
+</script>
+
+<!--
+  UI: everything that touches the DOM. No logic lives here that the tests
+  cannot reach - this script only reads state and calls the core.
+-->
+<script id="ui">
+(function () {
+  'use strict';
+
+  var Core = window.SVCCore;
+  var state = null;
+  var loaded = null;      // { fileName, parsed } waiting for the start options
+  var lastActionAt = 0;   // 300ms guard against double-taps on CONFIRM
+  var lastUndoAt = 0;     // same guard per button, so undo never blocks redo
+  var lastRedoAt = 0;
+
+  function $(id) { return document.getElementById(id); }
+  function on(el, ev, fn) { el.addEventListener(ev, fn, false); }
+  function show(el, visible) {
+    if (visible) { el.removeAttribute('hidden'); } else { el.setAttribute('hidden', ''); }
+  }
+  function clear(el) { while (el.firstChild) { el.removeChild(el.firstChild); } }
+  function el(tag, className, textContent) {
+    var node = document.createElement(tag);
+    if (className) { node.className = className; }
+    if (textContent !== undefined) { node.textContent = textContent; }
+    return node;
+  }
+
+  // --------------------------------------------------------------- storage
+
+  // Autosave after every action. A full session is tens of KB, far under the
+  // localStorage cap, and localStorage is the most reliable store on the old
+  // WebViews. The risk is the OS clearing it, which is what the export nag is
+  // for - not this.
+  var STORE_KEY = 'svc-fieldnotes.session.v1';
+
+  function save() {
+    if (!state) { return; }
+    try {
+      window.localStorage.setItem(STORE_KEY, Core.exportSessionJSON(state));
+    } catch (storeError) {
+      // Full, or blocked in private mode. Nothing useful to do mid-plate;
+      // the operator still has export.
+    }
+  }
+
+  function readSaved() {
+    try { return window.localStorage.getItem(STORE_KEY); } catch (readError) { return null; }
+  }
+
+  function clearSaved() {
+    try { window.localStorage.removeItem(STORE_KEY); } catch (clearError) { /* nothing to do */ }
+  }
+
+  // ----------------------------------------------------------------- theme
+
+  // Kept apart from the session: the operator's eyes do not reset when the
+  // plan does, so Start Fresh must not throw the theme away.
+  var THEME_KEY = 'svc-fieldnotes.theme';
+  var theme = 'light';
+
+  function applyTheme(next) {
+    theme = next === 'dark' ? 'dark' : 'light';
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    $('in-dark').checked = theme === 'dark';
+    try { window.localStorage.setItem(THEME_KEY, theme); } catch (themeError) { /* nothing to do */ }
+  }
+
+  (function initTheme() {
+    var saved = null;
+    try { saved = window.localStorage.getItem(THEME_KEY); } catch (readError) { saved = null; }
+    if (saved !== 'dark' && saved !== 'light') {
+      // Only seeds the first run. Light is the default in sunlight.
+      saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'dark' : 'light';
+    }
+    applyTheme(saved);
+  })();
+
+  on($('in-dark'), 'change', function () { applyTheme($('in-dark').checked ? 'dark' : 'light'); });
+
+  // ----------------------------------------------------------- start screen
+
+  function setStartError(message) {
+    var box = $('start-error');
+    box.textContent = message || '';
+    show(box, !!message);
+  }
+
+  function lastNonEmpty(parsed, col) {
+    if (parsed.header.indexOf(col) === -1) { return ''; }
+    for (var i = parsed.rows.length - 1; i >= 0; i--) {
+      var v = parsed.rows[i][col];
+      if (v !== undefined && String(v).trim() !== '') { return String(v); }
+    }
+    return '';
+  }
+
+  on($('file-input'), 'change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) { return; }
+    var reader = new FileReader();
+    reader.onerror = function () {
+      setStartError('Could not read that file.');
+    };
+    reader.onload = function () {
+      try {
+        var parsed = Core.parseCSV(String(reader.result));
+        var missing = Core.missingRequired(parsed.header);
+        if (missing.length) {
+          // The one hard stop in the app: without these there is nothing to fill.
+          throw new Error('Missing required column(s): ' + missing.join(', ') +
+            '\nThis plan cannot be used until they are present.');
+        }
+        if (!parsed.rows.length) {
+          throw new Error('This plan has no data rows - nothing to fill.');
+        }
+        loaded = { fileName: file.name, parsed: parsed };
+        setStartError('');
+
+        var filled = 0;
+        var highest = null;
+        for (var i = 0; i < parsed.rows.length; i++) {
+          var n = Core.toFileNum(parsed.rows[i].FileNum);
+          if (n !== null) { filled += 1; if (highest === null || n > highest) { highest = n; } }
+        }
+        $('file-summary').textContent = parsed.rows.length + ' rows, ' +
+          parsed.header.length + ' columns' +
+          (filled ? ', ' + filled + ' already captured (highest ' + highest + ')' : '');
+
+        // Carry over whatever the file already says, so a resumed day does not
+        // have to be retyped.
+        if (highest !== null) { $('in-start').value = String(highest + 1); }
+        ['Date', 'Prefix', 'Subfolder'].forEach(function (col) {
+          var input = $('in-' + col.toLowerCase());
+          var standing = lastNonEmpty(parsed, col);
+          if (standing && !input.value) { input.value = standing; }
+        });
+
+        $('btn-start').disabled = false;
+      } catch (err) {
+        loaded = null;
+        $('btn-start').disabled = true;
+        $('file-summary').textContent = 'No file loaded.';
+        setStartError(err.message);
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  on($('btn-start'), 'click', function () {
+    if (!loaded) { return; }
+    try {
+      state = Core.createSession({
+        fileName: loaded.fileName,
+        parsed: loaded.parsed,
+        config: {
+          startFileNum: parseInt($('in-start').value, 10) || 0,
+          wrConsumesFileNumber: $('in-wr-consumes').checked
+        },
+        meta: {
+          Date: $('in-date').value,
+          Prefix: $('in-prefix').value,
+          Subfolder: $('in-subfolder').value
+        }
+      });
+    } catch (err) {
+      setStartError(err.message);
+      return;
+    }
+    startMain();
+  });
+
+  function startMain() {
+    show($('screen-start'), false);
+    show($('screen-main'), true);
+    render();
+    save();
+    // A partly-filled plan hides whatever the earlier session discarded, so
+    // the counter is a guess until the instrument confirms it.
+    if (state.needsReconcile) { openReconcile('This plan was already part-filled.'); }
+  }
+
+  // Never silently resume, and never silently discard.
+  (function offerResume() {
+    var saved = readSaved();
+    if (!saved) { return; }
+    var preview;
+    try { preview = Core.importSessionJSON(saved); } catch (badSession) { clearSaved(); return; }
+    var p = Core.progress(preview);
+    $('resume-text').textContent = 'Unfinished session: ' + preview.fileName + ' - ' +
+      (p.scoped ? p.label + ' ' : '') + p.done + '/' + p.total +
+      ', next file ' + preview.nextFileNum + '.';
+    show($('resume-box'), true);
+
+    on($('btn-resume'), 'click', function () {
+      state = preview;
+      show($('resume-box'), false);
+      startMain();
+    });
+    on($('btn-fresh'), 'click', function () {
+      clearSaved();
+      show($('resume-box'), false);
+    });
+  })();
+
+  // ------------------------------------------------------------- rendering
+
+  function identityLine(parts, limit) {
+    var out = [];
+    for (var i = 0; i < parts.length && (!limit || i < limit); i++) {
+      out.push(parts[i].key + ' = ' + parts[i].value);
+    }
+    return out.join(', ');
+  }
+
+  function renderCard() {
+    var lead = $('card-lead');
+    var fields = $('card-fields');
+    clear(lead);
+    clear(fields);
+
+    var id = Core.rowIdentity(state, state.cursor);
+    for (var i = 0; i < id.lead.length; i++) {
+      if (i > 0) { lead.appendChild(document.createTextNode(' ')); }
+      lead.appendChild(el('span', 'k', id.lead[i].key + ' '));
+      lead.appendChild(document.createTextNode(id.lead[i].value));
+    }
+    fields.textContent = identityLine(id.fields, 0);
+
+    var wr = $('card-wr');
+    show(wr, state.currentWR !== null);
+    wr.textContent = 'WR ' + state.currentWR;
+
+    var row = state.plan[state.cursor];
+    var filledNote = $('card-filled');
+    var isFilled = row && Core.isFilled(state, state.cursor);
+    show(filledNote, !!isFilled);
+    if (isFilled) { filledNote.textContent = 'already captured as file ' + row.FileNum; }
+
+    var comment = $('card-comment');
+    var hasComment = row && row.comments && String(row.comments).trim() !== '';
+    show(comment, !!hasComment);
+    if (hasComment) { comment.textContent = row.comments; }
+  }
+
+  function renderNextUp() {
+    var line = $('next-up');
+    var index = state.cursor + 1;
+    if (index >= state.plan.length) {
+      line.textContent = 'next up: end of plan';
+      return;
+    }
+    var id = Core.rowIdentity(state, index);
+    var bits = [];
+    for (var i = 0; i < id.lead.length; i++) { bits.push(id.lead[i].key + ' ' + id.lead[i].value); }
+    var extra = identityLine(id.fields, 2);
+    if (extra) { bits.push(extra); }
+    line.textContent = 'next up: ' + bits.join('  /  ');
+  }
+
+  function render() {
+    if (!state) { return; }
+
+    $('status-file').textContent = state.fileName;
+    var p = Core.progress(state);
+    $('status-plate').textContent = p.scoped ? p.label : '';
+    $('status-progress').textContent = p.done + '/' + p.total;
+
+    $('next-file-num').textContent = String(state.nextFileNum);
+
+    renderCard();
+    renderNextUp();
+
+    var confirmBtn = $('btn-confirm');
+    var filled = state.plan.length > 0 && Core.isFilled(state, state.cursor);
+    confirmBtn.textContent = filled ? 'OVERWRITE' : 'CONFIRM';
+    confirmBtn.className = filled ? 'overwrite' : '';
+    confirmBtn.disabled = state.plan.length === 0;
+
+    $('btn-prev').disabled = state.cursor <= 0;
+    $('btn-next').disabled = state.cursor >= state.plan.length - 1;
+    $('btn-undo').disabled = !Core.canUndo(state);
+    $('btn-redo').disabled = !Core.canRedo(state);
+  }
+
+  // Everything that changes state comes back through here.
+  function afterAction() {
+    render();
+    save();
+    nagIfDone();
+  }
+
+  // localStorage is the mitigation for a browser kill, not for the OS clearing
+  // storage under pressure. The mitigation for that is getting the file off
+  // the tablet, so ask at the end of each plate and at the end of the plan.
+  var naggedFor = null;
+  var pendingNag = null;
+
+  function nagIfDone() {
+    var p = Core.progress(state);
+    var key = p.label + '|' + p.total;
+    if (p.done < p.total || naggedFor === key) { return; }
+    naggedFor = key;
+    var everything = true;
+    for (var i = 0; i < state.plan.length; i++) {
+      if (Core.isBlank(state.plan[i].FileNum)) { everything = false; break; }
+    }
+    var nag = { label: p.label, everything: everything };
+    // A sheet is already up - reconcile, say. Taking the screen out from under
+    // it would strand the buttons the operator is halfway through using, so
+    // wait until they are done and nag on the way out.
+    if (sheetIsOpen()) { pendingNag = nag; return; }
+    openNag(nag);
+  }
+
+  function openNag(nag) {
+    openSheet(nag.everything ? 'Plan complete' : 'Plate complete', function (body) {
+      body.appendChild(el('p', 'sheet-note', nag.everything
+        ? 'Every row has a file number. Export now - the session only lives on this tablet.'
+        : (nag.label || 'This plate') + ' is finished. Good moment to export.'));
+      sheetButton(body, 'EXPORT NOW', function () { closeSheet(); openExport(); });
+      sheetButton(body, 'LATER', closeSheet);
+    });
+  }
+
+  // --------------------------------------------------------------- actions
+
+  on($('btn-confirm'), 'click', function () {
+    if (!state || !state.plan.length) { return; }
+    var now = Date.now();
+    if (now - lastActionAt < 300) { return; }  // a bounced tap is not a second scan
+    lastActionAt = now;
+    if (Core.isFilled(state, state.cursor)) { Core.overwrite(state); }
+    else { Core.confirm(state); }
+    afterAction();
+  });
+
+  on($('btn-next'), 'click', function () { Core.moveCursor(state, 1); render(); save(); });
+  on($('btn-prev'), 'click', function () { Core.moveCursor(state, -1); render(); save(); });
+
+  on($('btn-undo'), 'click', function () {
+    if (!Core.canUndo(state)) { return; }
+    var now = Date.now();
+    if (now - lastUndoAt < 300) { return; }  // a bounced tap is not two undos
+    lastUndoAt = now;
+    Core.undo(state);
+    lastActionAt = 0;   // undo must never be swallowed by the confirm guard
+    afterAction();
+  });
+
+  on($('btn-redo'), 'click', function () {
+    if (!Core.canRedo(state)) { return; }
+    var now = Date.now();
+    if (now - lastRedoAt < 300) { return; }  // a bounced tap is not two redos
+    lastRedoAt = now;
+    Core.redo(state);
+    afterAction();
+  });
+
+  // The operator confirms which file the white reference actually is - WRs get
+  // re-taken too, and a WR is the first thing captured before any data, so
+  // this is the cheapest possible place to catch drift. This step IS the
+  // reconcile; nothing asks again afterwards.
+  on($('btn-wr'), 'click', function () {
+    if (!state.config.wrConsumesFileNumber) {
+      // The reference writes no file, so there is no number to confirm - but
+      // drift can still have happened, so ask the ordinary way.
+      Core.whiteRef(state);
+      afterAction();
+      openReconcile('White reference logged (no file written).');
+      return;
+    }
+
+    openSheet('White reference', function (body) {
+      body.appendChild(el('p', 'sheet-note',
+        'Which file number is the white reference? The app expects ' + state.nextFileNum +
+        '. Change it if the WR was re-taken - anything skipped gets logged.'));
+
+      var input = el('input', 'big-input');
+      input.setAttribute('type', 'number');
+      input.setAttribute('inputmode', 'numeric');
+      input.setAttribute('step', '1');
+      input.value = String(state.nextFileNum);
+      body.appendChild(input);
+
+      var go = el('button', 'primary', 'CONFIRM WR');
+      on(go, 'click', function () {
+        var num = parseInt(input.value, 10);
+        if (isNaN(num)) { return; }
+        Core.whiteRef(state, num);
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+      input.focus();
+      input.select();
+    });
+  });
+
+  // One tap. Anything worth saying about a discard goes in the note.
+  on($('btn-discard'), 'click', function () {
+    var now = Date.now();
+    if (now - lastActionAt < 300) { return; }
+    lastActionAt = now;
+    Core.discard(state);
+    afterAction();
+  });
+
+  on($('btn-note'), 'click', function () {
+    var row = state.plan[state.cursor];
+    openSheet('Note on this row', function (body) {
+      var area = el('textarea', 'note');
+      area.value = row && row.comments ? String(row.comments) : '';
+      body.appendChild(area);
+      body.appendChild(el('p', 'sheet-note',
+        'Goes in the comments column. Commas, quotes and line breaks are all fine.'));
+      var go = el('button', 'primary', 'SAVE NOTE');
+      on(go, 'click', function () {
+        Core.setComment(state, area.value);
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+      area.focus();
+    });
+  });
+
+  // ------------------------------------------------------------- reconcile
+
+  // The operator reads the next file number off the instrument. Caught here it
+  // costs a few scans of uncertainty; caught in the QC pipeline three weeks
+  // later it costs the day.
+  on($('next-file'), 'click', function () { openReconcile(''); });
+
+  function openReconcile(lead) {
+    openSheet('Reconcile', function (body) {
+      if (lead) { body.appendChild(el('p', 'sheet-note', lead)); }
+      body.appendChild(el('p', 'sheet-note',
+        'What file number will the instrument write next? The app expects ' +
+        state.nextFileNum + '.'));
+
+      var verdict = el('div', 'verdict');
+      show(verdict, false);
+      body.appendChild(verdict);
+
+      var input = el('input', 'big-input');
+      input.setAttribute('type', 'number');
+      input.setAttribute('inputmode', 'numeric');
+      input.setAttribute('step', '1');
+      input.value = String(state.nextFileNum);
+      body.appendChild(input);
+
+      var actions = el('div');
+      body.appendChild(actions);
+
+      // No CHECK step: the verdict and the buttons follow the field as it is
+      // typed, so a different number turns the primary button into the resync
+      // action on the spot - what is tapped is always what is on screen, and
+      // a bounce cannot land on a button that has just appeared underneath.
+      function refresh() {
+        var actual = parseInt(input.value, 10);
+        clear(verdict);
+        clear(actions);
+        show(verdict, false);
+        if (isNaN(actual)) { return; }
+
+        var result = Core.reconcileCheck(state, actual);
+
+        if (result.match) {
+          verdict.className = 'verdict ok';
+          verdict.textContent = '✓ Match - carry on.';
+          show(verdict, true);
+          var done = el('button', 'primary', 'BACK TO WORK');
+          on(done, 'click', function () {
+            Core.reconcile(state, actual, 'accept');
+            lastActionAt = Date.now();   // a bounce through the closing sheet
+            closeSheet();                // must not land on CONFIRM
+            afterAction();
+          });
+          actions.appendChild(done);
+          return;
+        }
+
+        verdict.className = 'verdict bad';
+        verdict.appendChild(document.createTextNode(
+          result.gap > 0
+            ? 'Instrument says ' + actual + ', app expects ' + result.expected +
+              ' - ' + result.gap + ' file' + (result.gap === 1 ? '' : 's') + ' unaccounted for.'
+            : 'Instrument says ' + actual + ', app expects ' + result.expected +
+              ' - the app is ' + (-result.gap) + ' ahead.'));
+        verdict.appendChild(el('div', 'detail', result.gap > 0
+          ? 'Logging them as discards keeps every file on the instrument accounted for.'
+          : 'The app counted files the instrument never wrote. Resyncing will reuse those numbers.'));
+        show(verdict, true);
+
+        var accept = el('button', 'primary', result.gap > 0
+          ? 'LOG ' + result.gap + ' DISCARD' + (result.gap === 1 ? '' : 'S') + ' AND RESYNC'
+          : 'RESYNC TO ' + actual);
+        on(accept, 'click', function () {
+          Core.reconcile(state, actual, 'accept');
+          lastActionAt = Date.now();   // a bounce through the closing sheet
+          closeSheet();                // must not land on CONFIRM
+          afterAction();
+        });
+        actions.appendChild(accept);
+
+        var note = el('button', 'sheet-btn', 'JUST NOTE IT, DO NOT RESYNC');
+        on(note, 'click', function () {
+          Core.reconcile(state, actual, 'note');
+          lastActionAt = Date.now();   // a bounce through the closing sheet
+          closeSheet();                // must not land on CONFIRM
+          afterAction();
+        });
+        actions.appendChild(note);
+      }
+
+      on(input, 'input', refresh);
+      refresh();
+      input.focus();
+      input.select();
+    });
+  }
+
+  // ---------------------------------------------------------------- sheets
+
+  function sheetIsOpen() { return !$('sheet').hasAttribute('hidden'); }
+
+  function openSheet(title, build, full) {
+    $('sheet-title').textContent = title;
+    var body = $('sheet-body');
+    clear(body);
+    build(body);
+    $('sheet').className = full ? 'full' : '';
+    show($('sheet'), true);
+  }
+
+  function closeSheet() {
+    show($('sheet'), false);
+    if (pendingNag) {
+      var nag = pendingNag;
+      pendingNag = null;
+      openNag(nag);
+    }
+  }
+
+  on($('btn-sheet-close'), 'click', closeSheet);
+  on($('sheet'), 'click', function (event) {
+    if (event.target === $('sheet')) { closeSheet(); }
+  });
+
+  function sheetButton(body, label, handler) {
+    var button = el('button', 'sheet-btn', label);
+    on(button, 'click', handler);
+    body.appendChild(button);
+    return button;
+  }
+
+  // ---------------------------------------------------------------- export
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  function stamp() {
+    var d = new Date();
+    return String(d.getFullYear()) + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
+      '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
+  }
+
+  // Every export is a new timestamped file. Nothing ever overwrites anything.
+  function outName(suffix, ext) {
+    var base = String(state.fileName).replace(/\.csv$/i, '');
+    return base + '_' + suffix + '_' + stamp() + '.' + ext;
+  }
+
+  // Blob first, data: URI second, and a textarea always - on the old tablets
+  // the textarea is the one that works, so it is never optional.
+  function downloadLink(filename, content, mime) {
+    var link = el('a', 'dl', 'DOWNLOAD ' + filename);
+    link.setAttribute('download', filename);
+    var url = null;
+    try {
+      if (typeof Blob !== 'undefined' && window.URL && window.URL.createObjectURL) {
+        url = window.URL.createObjectURL(new Blob([content], { type: mime }));
+      }
+    } catch (blobError) { url = null; }
+    if (!url) {
+      try { url = 'data:' + mime + ';charset=utf-8,' + encodeURIComponent(content); }
+      catch (dataError) { url = null; }
+    }
+    if (url) {
+      link.setAttribute('href', url);
+    } else {
+      link.className = 'dl dead';
+      link.textContent = 'Download unavailable - copy the text below';
+    }
+    return link;
+  }
+
+  function exportBlock(body, title, filename, content, mime) {
+    var block = el('div', 'export-block');
+    block.appendChild(el('h3', null, title));
+    block.appendChild(downloadLink(filename, content, mime));
+
+    var area = el('textarea');
+    area.value = content;
+    area.setAttribute('readonly', 'readonly');
+    block.appendChild(area);
+
+    var copy = el('button', null, 'SELECT ALL (then copy)');
+    on(copy, 'click', function () {
+      area.focus();
+      area.setSelectionRange(0, area.value.length);
+      try { document.execCommand('copy'); } catch (copyError) { /* selection still stands */ }
+    });
+    block.appendChild(copy);
+
+    body.appendChild(block);
+  }
+
+  function openExport() {
+    openSheet('Export', function (body) {
+      // Warnings sit above the downloads, and stop nothing.
+      appendWarnings(body);
+      body.appendChild(el('p', 'sheet-note',
+        'Download if the tablet allows it. Otherwise select the text and share it out.'));
+      exportBlock(body, 'Plan CSV', outName('filled', 'csv'),
+        Core.exportPlanCSV(state), 'text/csv');
+      exportBlock(body, 'Event log CSV', outName('events', 'csv'),
+        Core.exportEventsCSV(state), 'text/csv');
+      exportBlock(body, 'Session file (to resume elsewhere)', outName('session', 'json'),
+        Core.exportSessionJSON(state), 'application/json');
+    });
+  }
+
+  // ------------------------------------------------------------- jump list
+
+  // The whole plan, one line per row, with the Jump button pinned to the left
+  // edge so the thumb always knows where it is.
+  function openJump() {
+    openSheet('Jump to a row', function (body) {
+      var current = null;
+      for (var i = 0; i < state.plan.length; i++) {
+        body.appendChild(jumpRow(i, function (node, index) {
+          if (index === state.cursor) { current = node; }
+        }));
+      }
+      // Land on where the operator actually is, not at the top of the plan.
+      if (current) {
+        setTimeout(function () { body.scrollTop = Math.max(0, current.offsetTop - 90); }, 0);
+      }
+    }, true);
+  }
+
+  function jumpRow(index, notice) {
+    var row = state.plan[index];
+    var filled = !Core.isBlank(row.FileNum);
+    var node = el('div', 'jump-row' + (filled ? ' filled' : '') +
+      (index === state.cursor ? ' current' : ''));
+
+    var go = el('button', null, 'GO');
+    on(go, 'click', function () {
+      Core.jumpTo(state, index);
+      closeSheet();
+      render();
+      save();
+    });
+    node.appendChild(go);
+
+    var id = Core.rowIdentity(state, index);
+    var info = el('div', 'jump-info');
+    var lead = [];
+    for (var i = 0; i < id.lead.length; i++) { lead.push(id.lead[i].key + ' ' + id.lead[i].value); }
+    info.appendChild(el('span', 'jump-lead', lead.join('  ')));
+    info.appendChild(el('span', 'jump-fields', identityLine(id.fields, 4)));
+    node.appendChild(info);
+
+    node.appendChild(el('div', 'jump-num' + (filled ? '' : ' empty'),
+      filled ? String(row.FileNum) : '-'));
+
+    notice(node, index);
+    return node;
+  }
+
+  // ------------------------------------------------------------- edit meta
+
+  function openMeta() {
+    openSheet('Date, Prefix, Subfolder', function (body) {
+      body.appendChild(el('p', 'sheet-note',
+        'Written on the current row only. Everything below it inherits the value downstream.'));
+
+      var inputs = {};
+      ['Date', 'Prefix', 'Subfolder'].forEach(function (col) {
+        var field = el('div', 'field');
+        var label = el('label', null, col);
+        field.appendChild(label);
+        var input = el('input');
+        input.setAttribute('type', col === 'Date' ? 'date' : 'text');
+        input.value = state.meta[col] || '';
+        field.appendChild(input);
+        inputs[col] = input;
+        body.appendChild(field);
+      });
+
+      var go = el('button', 'primary', 'SAVE');
+      on(go, 'click', function () {
+        Core.setMeta(state, {
+          Date: inputs.Date.value,
+          Prefix: inputs.Prefix.value,
+          Subfolder: inputs.Subfolder.value
+        });
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+    });
+  }
+
+  // ------------------------------------------------------------ validation
+
+  // Warn, do not block. The operator is in a glasshouse and knows things the
+  // app does not.
+  function appendWarnings(body) {
+    var warnings = Core.validate(state);
+    if (!warnings.length) {
+      body.appendChild(el('div', 'warn-ok', '✓ Nothing looks wrong with the plan.'));
+      return;
+    }
+    var list = el('ul', 'warn-list');
+    warnings.forEach(function (warning) {
+      var item = el('li', null, warning.message);
+      if (warning.rows && warning.rows.length && warning.rows.length <= 12) {
+        item.appendChild(el('div', null, 'rows: ' + warning.rows.map(function (r) {
+          return r + 1;
+        }).join(', ')));
+      }
+      list.appendChild(item);
+    });
+    body.appendChild(list);
+  }
+
+  function openCheck() {
+    openSheet('Check plan', function (body) {
+      appendWarnings(body);
+      body.appendChild(el('p', 'sheet-note',
+        'Warnings never block anything - export works regardless.'));
+    });
+  }
+
+  // ------------------------------------------------------------------ menu
+
+  on($('btn-menu'), 'click', function () {
+    openSheet('Menu', function (body) {
+      sheetButton(body, 'Jump to a row', function () { closeSheet(); openJump(); });
+      sheetButton(body, 'Date, Prefix, Subfolder', function () { closeSheet(); openMeta(); });
+      sheetButton(body, 'Check plan', function () { closeSheet(); openCheck(); });
+      sheetButton(body, 'Export', function () { closeSheet(); openExport(); });
+      var themeButton = sheetButton(body,
+        theme === 'dark' ? 'Dark mode: ON' : 'Dark mode: OFF',
+        function () {
+          applyTheme(theme === 'dark' ? 'light' : 'dark');
+          themeButton.textContent = theme === 'dark' ? 'Dark mode: ON' : 'Dark mode: OFF';
+        });
+      sheetButton(body, 'End session', function () {
+        closeSheet();
+        openSheet('End session', function (inner) {
+          inner.appendChild(el('p', 'sheet-note',
+            'Export first - ending the session clears the autosave on this tablet.'));
+          sheetButton(inner, 'EXPORT', function () { closeSheet(); openExport(); });
+          var end = el('button', 'sheet-btn', 'END SESSION AND CLEAR');
+          on(end, 'click', function () {
+            clearSaved();
+            state = null;
+            closeSheet();
+            window.location.reload();
+          });
+          inner.appendChild(end);
+        });
+      });
+    });
+  });
+
+  // --------------------------------------------- session file from elsewhere
+
+  on($('session-input'), 'change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) { return; }
+    var reader = new FileReader();
+    reader.onerror = function () { setStartError('Could not read that file.'); };
+    reader.onload = function () {
+      try {
+        state = Core.importSessionJSON(String(reader.result));
+      } catch (err) {
+        setStartError('That is not a session file this version can read.\n' + err.message);
+        return;
+      }
+      setStartError('');
+      show($('resume-box'), false);
+      startMain();
+    };
+    reader.readAsText(file);
+  });
+
+  // Best-effort only: mobile browsers fire this unreliably, which is why the
+  // real protection is autosave.
+  on(window, 'beforeunload', function (event) {
+    if (!state) { return undefined; }
+    event.preventDefault();
+    event.returnValue = '';
+    return '';
+  });
+})();
+</script>
+
+</body>
+</html>

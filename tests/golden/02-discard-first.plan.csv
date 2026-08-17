@@ -1,0 +1,9 @@
+row,range,rep,tech_rep,FileNum,WRNum,comments,Date,Day,Prefix,Subfolder,BCN,trial,treatment,plate,Q2_pos,order
+1,1,1,1,1,,,2026-08-18,1,KLN300,day1,41207,KLN-482,Spring Type,Plate 1,E1,1
+1,2,1,1,2,,,,1,,,41338,KLN-482,Spring Type,Plate 1,F1,2
+3,1,1,2,,,,,1,,,V1,KLN-482,Spring Type,Plate 1,F2,3
+7,4,2,1,,,,,1,,,47512,KLN-482,Spring Type,Plate 1,G3,4
+11,1,1,1,,,,,1,,,39604,KLN-482,Winter Type,Plate 2,C3,1
+15,2,1,1,,,,,1,,,V3,KLN-482,Winter Type,Plate 2,C4,2
+17,3,2,1,,,,,1,,,46881,KLN-482,Winter Type,Plate 2,C5,3
+19,4,2,2,,,,,1,,,43072,KLN-482,Winter Type,Plate 2,C6,4
