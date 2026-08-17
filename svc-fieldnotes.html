@@ -39,7 +39,13 @@ html, body {
   -webkit-text-size-adjust: 100%;
 }
 
-body { overflow: hidden; }
+body {
+  overflow: hidden;
+  /* No double-tap zoom, no blue flash on tap, no pull-to-refresh mid-plate. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  overscroll-behavior: none;
+}
 
 #app { height: 100%; display: flex; flex-direction: column; }
 
@@ -218,6 +224,8 @@ input, select {
   flex: 0 0 auto;
   display: flex;
   border-top: 1px solid var(--line);
+  /* Clear of the gesture bar on phones that have one. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 #secondary-row button {
   flex: 1 1 0;
@@ -372,7 +380,14 @@ textarea.note {
 }
 #sheet-title { font-size: 16px; font-weight: 700; }
 #btn-sheet-close { margin-left: auto; min-height: 44px; }
-#sheet-body { overflow-y: auto; padding: 12px; flex: 1 1 auto; min-height: 0; }
+#sheet-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 .sheet-btn {
   display: block;
@@ -1689,6 +1704,7 @@ textarea.note {
   // storage under pressure. The mitigation for that is getting the file off
   // the tablet, so ask at the end of each plate and at the end of the plan.
   var naggedFor = null;
+  var pendingNag = null;
 
   function nagIfDone() {
     var p = Core.progress(state);
@@ -1699,10 +1715,19 @@ textarea.note {
     for (var i = 0; i < state.plan.length; i++) {
       if (Core.isBlank(state.plan[i].FileNum)) { everything = false; break; }
     }
-    openSheet(everything ? 'Plan complete' : 'Plate complete', function (body) {
-      body.appendChild(el('p', 'sheet-note', everything
+    var nag = { label: p.label, everything: everything };
+    // A sheet is already up - reconcile, say. Taking the screen out from under
+    // it would strand the buttons the operator is halfway through using, so
+    // wait until they are done and nag on the way out.
+    if (sheetIsOpen()) { pendingNag = nag; return; }
+    openNag(nag);
+  }
+
+  function openNag(nag) {
+    openSheet(nag.everything ? 'Plan complete' : 'Plate complete', function (body) {
+      body.appendChild(el('p', 'sheet-note', nag.everything
         ? 'Every row has a file number. Export now - the session only lives on this tablet.'
-        : (p.label || 'This plate') + ' is finished. Good moment to export.'));
+        : (nag.label || 'This plate') + ' is finished. Good moment to export.'));
       sheetButton(body, 'EXPORT NOW', function () { closeSheet(); openExport(); });
       sheetButton(body, 'LATER', closeSheet);
     });
@@ -1870,6 +1895,8 @@ textarea.note {
 
   // ---------------------------------------------------------------- sheets
 
+  function sheetIsOpen() { return !$('sheet').hasAttribute('hidden'); }
+
   function openSheet(title, build, full) {
     $('sheet-title').textContent = title;
     var body = $('sheet-body');
@@ -1879,7 +1906,14 @@ textarea.note {
     show($('sheet'), true);
   }
 
-  function closeSheet() { show($('sheet'), false); }
+  function closeSheet() {
+    show($('sheet'), false);
+    if (pendingNag) {
+      var nag = pendingNag;
+      pendingNag = null;
+      openNag(nag);
+    }
+  }
 
   on($('btn-sheet-close'), 'click', closeSheet);
   on($('sheet'), 'click', function (event) {
