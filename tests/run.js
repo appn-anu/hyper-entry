@@ -785,6 +785,28 @@ if (fs.existsSync(REAL_DATA)) {
   console.log('  skip  real-data/ not present');
 }
 
+// ------------------------------------------------------------- UI smoke ----
+
+// In its own process: it stubs document, window, FileReader and Date.now, and
+// none of that should leak into the tests above.
+
+section('UI smoke (stub DOM, separate process)');
+
+const smoke = require('node:child_process').spawnSync(
+  process.execPath, [path.join(__dirname, 'smoke-ui.js')], { encoding: 'utf8' });
+
+if (smoke.status === 0) {
+  const lines = smoke.stdout.split('\n').filter(function (l) { return /^\s+ok\s/.test(l); });
+  passed += 1;
+  console.log('  ok    ' + lines.length + ' UI checks passed');
+} else {
+  failed += 1;
+  console.log('  FAIL  UI smoke test');
+  console.log(String(smoke.stdout || smoke.stderr).split('\n')
+    .filter(function (l) { return /FAIL|Error/.test(l); })
+    .map(function (l) { return '      ' + l; }).join('\n'));
+}
+
 // ---------------------------------------------------------------- done ----
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed' +

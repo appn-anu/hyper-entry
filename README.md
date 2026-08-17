@@ -85,6 +85,11 @@ is the review.
   and an event log CSV that are byte-compared.
 - `real-data/` - the real day files, untracked. When present, the harness also
   loads and walks each one as a smoke test. When absent it skips silently.
+- `tests/smoke-ui.js` - drives a whole session through the UI script on a stub
+  DOM: load, start, confirm, undo, redo, white reference, reconcile a mismatch,
+  discard, jump, export. `run.js` spawns it in its own process. It is a stub and
+  not a browser, so it proves the wiring runs, not that anything renders or that
+  a thumb can reach it.
 
 ### If a tablet fails
 
