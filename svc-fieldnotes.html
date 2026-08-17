@@ -214,6 +214,72 @@ input, select {
 }
 #btn-confirm:disabled { background: var(--panel); color: var(--muted); border-color: var(--line); }
 
+#secondary-row {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: 1px solid var(--line);
+}
+#secondary-row button {
+  flex: 1 1 0;
+  min-height: 52px;
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 2px;
+}
+#secondary-row button:last-child { border-right: 0; }
+#secondary-row button.wr { color: var(--wr); }
+#secondary-row button.danger { color: var(--danger); }
+#secondary-row button.undo { background: var(--panel); font-weight: 700; }
+#secondary-row button:disabled { color: var(--muted); background: var(--bg); }
+
+/* ---------------------------------------------------------------- resume */
+
+.resume {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.resume-actions { display: flex; margin-top: 10px; }
+.resume-actions button { flex: 1 1 0; margin-right: 8px; }
+.resume-actions button:last-child { margin-right: 0; }
+
+/* ------------------------------------------------------------- reconcile */
+
+.big-input {
+  font-size: 32px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-height: 64px;
+  margin-bottom: 10px;
+}
+.verdict {
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.verdict.ok { background: #e6f4ea; border: 1px solid var(--go); color: var(--go); }
+.verdict.bad { background: #fdecea; border: 1px solid var(--danger); color: var(--danger); }
+.verdict .detail { font-weight: 400; font-size: 14px; margin-top: 6px; color: var(--ink); }
+
+textarea.note {
+  width: 100%;
+  height: 120px;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
 /* ----------------------------------------------------------------- sheet */
 
 #sheet {
@@ -296,6 +362,14 @@ input, select {
     <h1>SVC Field Notes</h1>
     <p class="sub">Load the day's plan CSV, then confirm your way down it.</p>
 
+    <div id="resume-box" class="resume" hidden>
+      <div id="resume-text"></div>
+      <div class="resume-actions">
+        <button id="btn-resume" class="primary">RESUME</button>
+        <button id="btn-fresh">START FRESH</button>
+      </div>
+    </div>
+
     <div id="start-error" class="error" hidden></div>
 
     <div class="field">
@@ -364,6 +438,14 @@ input, select {
     </div>
 
     <button id="btn-confirm">CONFIRM</button>
+
+    <div id="secondary-row">
+      <button id="btn-wr" class="wr">WR</button>
+      <button id="btn-discard" class="danger">DISCARD</button>
+      <button id="btn-redo">REDO</button>
+      <button id="btn-note">NOTE</button>
+      <button id="btn-undo" class="undo">UNDO</button>
+    </div>
   </section>
 
   <div id="sheet" hidden>
@@ -1300,6 +1382,32 @@ input, select {
     return node;
   }
 
+  // --------------------------------------------------------------- storage
+
+  // Autosave after every action. A full session is tens of KB, far under the
+  // localStorage cap, and localStorage is the most reliable store on the old
+  // WebViews. The risk is the OS clearing it, which is what the export nag is
+  // for - not this.
+  var STORE_KEY = 'svc-fieldnotes.session.v1';
+
+  function save() {
+    if (!state) { return; }
+    try {
+      window.localStorage.setItem(STORE_KEY, Core.exportSessionJSON(state));
+    } catch (storeError) {
+      // Full, or blocked in private mode. Nothing useful to do mid-plate;
+      // the operator still has export.
+    }
+  }
+
+  function readSaved() {
+    try { return window.localStorage.getItem(STORE_KEY); } catch (readError) { return null; }
+  }
+
+  function clearSaved() {
+    try { window.localStorage.removeItem(STORE_KEY); } catch (clearError) { /* nothing to do */ }
+  }
+
   // ----------------------------------------------------------- start screen
 
   function setStartError(message) {
@@ -1386,10 +1494,41 @@ input, select {
       setStartError(err.message);
       return;
     }
+    startMain();
+  });
+
+  function startMain() {
     show($('screen-start'), false);
     show($('screen-main'), true);
     render();
-  });
+    save();
+    // A partly-filled plan hides whatever the earlier session discarded, so
+    // the counter is a guess until the instrument confirms it.
+    if (state.needsReconcile) { openReconcile('This plan was already part-filled.'); }
+  }
+
+  // Never silently resume, and never silently discard.
+  (function offerResume() {
+    var saved = readSaved();
+    if (!saved) { return; }
+    var preview;
+    try { preview = Core.importSessionJSON(saved); } catch (badSession) { clearSaved(); return; }
+    var p = Core.progress(preview);
+    $('resume-text').textContent = 'Unfinished session: ' + preview.fileName + ' - ' +
+      (p.scoped ? p.label + ' ' : '') + p.done + '/' + p.total +
+      ', next file ' + preview.nextFileNum + '.';
+    show($('resume-box'), true);
+
+    on($('btn-resume'), 'click', function () {
+      state = preview;
+      show($('resume-box'), false);
+      startMain();
+    });
+    on($('btn-fresh'), 'click', function () {
+      clearSaved();
+      show($('resume-box'), false);
+    });
+  })();
 
   // ------------------------------------------------------------- rendering
 
@@ -1467,11 +1606,38 @@ input, select {
 
     $('btn-last').disabled = state.cursor <= 0;
     $('btn-next').disabled = state.cursor >= state.plan.length - 1;
+    $('btn-undo').disabled = !Core.canUndo(state);
+    $('btn-redo').disabled = !Core.canRedo(state);
   }
 
   // Everything that changes state comes back through here.
   function afterAction() {
     render();
+    save();
+    nagIfDone();
+  }
+
+  // localStorage is the mitigation for a browser kill, not for the OS clearing
+  // storage under pressure. The mitigation for that is getting the file off
+  // the tablet, so ask at the end of each plate and at the end of the plan.
+  var naggedFor = null;
+
+  function nagIfDone() {
+    var p = Core.progress(state);
+    var key = p.label + '|' + p.total;
+    if (p.done < p.total || naggedFor === key) { return; }
+    naggedFor = key;
+    var everything = true;
+    for (var i = 0; i < state.plan.length; i++) {
+      if (Core.isBlank(state.plan[i].FileNum)) { everything = false; break; }
+    }
+    openSheet(everything ? 'Plan complete' : 'Plate complete', function (body) {
+      body.appendChild(el('p', 'sheet-note', everything
+        ? 'Every row has a file number. Export now - the session only lives on this tablet.'
+        : (p.label || 'This plate') + ' is finished. Good moment to export.'));
+      sheetButton(body, 'EXPORT NOW', function () { closeSheet(); openExport(); });
+      sheetButton(body, 'LATER', closeSheet);
+    });
   }
 
   // --------------------------------------------------------------- actions
@@ -1486,8 +1652,153 @@ input, select {
     afterAction();
   });
 
-  on($('btn-next'), 'click', function () { Core.moveCursor(state, 1); render(); });
-  on($('btn-last'), 'click', function () { Core.moveCursor(state, -1); render(); });
+  on($('btn-next'), 'click', function () { Core.moveCursor(state, 1); render(); save(); });
+  on($('btn-last'), 'click', function () { Core.moveCursor(state, -1); render(); save(); });
+
+  on($('btn-undo'), 'click', function () {
+    if (!Core.canUndo(state)) { return; }
+    Core.undo(state);
+    lastActionAt = 0;   // undo must never be swallowed by the confirm guard
+    afterAction();
+  });
+
+  on($('btn-redo'), 'click', function () {
+    if (!Core.canRedo(state)) { return; }
+    Core.redo(state);
+    afterAction();
+  });
+
+  // A white reference is where numbering most often goes sideways, so it
+  // always ends in a reconcile prompt.
+  on($('btn-wr'), 'click', function () {
+    var record = Core.whiteRef(state);
+    afterAction();
+    var taken = record.result;
+    openReconcile(taken === null
+      ? 'White reference logged (no file written).'
+      : 'White reference is file ' + taken + '.');
+  });
+
+  on($('btn-discard'), 'click', function () {
+    openSheet('Discard file ' + state.nextFileNum, function (body) {
+      body.appendChild(el('p', 'sheet-note',
+        'The file exists on the instrument but is junk. The number is burned and logged; the cursor stays put.'));
+      var reason = el('input');
+      reason.setAttribute('type', 'text');
+      reason.setAttribute('placeholder', 'reason (optional)');
+      body.appendChild(reason);
+      body.appendChild(el('div', null, ' '));
+      var go = el('button', 'primary', 'DISCARD');
+      on(go, 'click', function () {
+        Core.discard(state, reason.value);
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+    });
+  });
+
+  on($('btn-note'), 'click', function () {
+    var row = state.plan[state.cursor];
+    openSheet('Note on this row', function (body) {
+      var area = el('textarea', 'note');
+      area.value = row && row.comments ? String(row.comments) : '';
+      body.appendChild(area);
+      body.appendChild(el('p', 'sheet-note',
+        'Goes in the comments column. Commas, quotes and line breaks are all fine.'));
+      var go = el('button', 'primary', 'SAVE NOTE');
+      on(go, 'click', function () {
+        Core.setComment(state, area.value);
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+      area.focus();
+    });
+  });
+
+  // ------------------------------------------------------------- reconcile
+
+  // The operator reads the next file number off the instrument. Caught here it
+  // costs a few scans of uncertainty; caught in the QC pipeline three weeks
+  // later it costs the day.
+  on($('next-file'), 'click', function () { openReconcile(''); });
+
+  function openReconcile(lead) {
+    openSheet('Reconcile', function (body) {
+      if (lead) { body.appendChild(el('p', 'sheet-note', lead)); }
+      body.appendChild(el('p', 'sheet-note',
+        'What file number will the instrument write next? The app expects ' +
+        state.nextFileNum + '.'));
+
+      var verdict = el('div', 'verdict');
+      show(verdict, false);
+      body.appendChild(verdict);
+
+      var input = el('input', 'big-input');
+      input.setAttribute('type', 'number');
+      input.setAttribute('inputmode', 'numeric');
+      input.setAttribute('step', '1');
+      input.value = String(state.nextFileNum);
+      body.appendChild(input);
+
+      var actions = el('div');
+      body.appendChild(actions);
+
+      var check = el('button', 'primary', 'CHECK');
+      on(check, 'click', function () {
+        var actual = parseInt(input.value, 10);
+        if (isNaN(actual)) { return; }
+        var result = Core.reconcileCheck(state, actual);
+        clear(actions);
+        show(verdict, true);
+
+        if (result.match) {
+          verdict.className = 'verdict ok';
+          verdict.textContent = '✓ Match - carry on.';
+          Core.reconcile(state, actual, 'accept');
+          afterAction();
+          var done = el('button', 'primary', 'BACK TO WORK');
+          on(done, 'click', closeSheet);
+          actions.appendChild(done);
+          return;
+        }
+
+        verdict.className = 'verdict bad';
+        clear(verdict);
+        verdict.appendChild(document.createTextNode(
+          result.gap > 0
+            ? 'Instrument says ' + actual + ', app expects ' + result.expected +
+              ' - ' + result.gap + ' file' + (result.gap === 1 ? '' : 's') + ' unaccounted for.'
+            : 'Instrument says ' + actual + ', app expects ' + result.expected +
+              ' - the app is ' + (-result.gap) + ' ahead.'));
+        verdict.appendChild(el('div', 'detail', result.gap > 0
+          ? 'Logging them as discards keeps every file on the instrument accounted for.'
+          : 'The app counted files the instrument never wrote. Resyncing will reuse those numbers.'));
+
+        var accept = el('button', 'primary', result.gap > 0
+          ? 'LOG ' + result.gap + ' DISCARD' + (result.gap === 1 ? '' : 'S') + ' AND RESYNC'
+          : 'RESYNC TO ' + actual);
+        on(accept, 'click', function () {
+          Core.reconcile(state, actual, 'accept');
+          closeSheet();
+          afterAction();
+        });
+        actions.appendChild(accept);
+
+        var note = el('button', 'sheet-btn', 'JUST NOTE IT, DO NOT RESYNC');
+        on(note, 'click', function () {
+          Core.reconcile(state, actual, 'note');
+          closeSheet();
+          afterAction();
+        });
+        actions.appendChild(note);
+      });
+      actions.appendChild(check);
+      input.focus();
+      input.select();
+    });
+  }
 
   // ---------------------------------------------------------------- sheets
 
@@ -1580,7 +1891,10 @@ input, select {
       var note = el('p', 'sheet-note',
         'Download if the tablet allows it. Otherwise select the text and share it out.');
       body.appendChild(note);
-      exportBlock(body, 'Plan CSV', outName('filled', 'csv'), Core.exportPlanCSV(state), 'text/csv');
+      exportBlock(body, 'Plan CSV', outName('filled', 'csv'),
+        Core.exportPlanCSV(state), 'text/csv');
+      exportBlock(body, 'Event log CSV', outName('events', 'csv'),
+        Core.exportEventsCSV(state), 'text/csv');
     });
   }
 
