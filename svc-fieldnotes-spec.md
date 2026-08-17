@@ -83,7 +83,7 @@ Rules:
    This drops straight into the existing QC pipeline with no changes. `FileNum` is
    always the bare integer, in the CSV and on screen - no padding anywhere.
 2. **Event log CSV** - audit trail, one row per action:
-   `timestamp,action,file_num,plan_row_index,plate,Q2_pos,BCN,note`
+   `timestamp,action,file_num,plan_row_index,note`
    (identity fields logged when present). `action` is one of
    `confirm | discard | white_ref | overwrite | undo | redo | comment | meta | reconcile`.
    This is the bit Excel never gave us: discarded file numbers become data instead of
