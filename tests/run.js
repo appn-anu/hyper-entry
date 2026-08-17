@@ -229,6 +229,48 @@ test('white reference consumes a number and stamps WRNum on the next confirm onl
   assert.equal(state.plan[1].WRNum, '', 'WRNum should only be written where it changes');
 });
 
+test('a white reference confirmed at a higher number logs the gap it found', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-a.csv', { config: { startFileNum: 85 } });
+  // The WR was re-taken twice: the app expected 85, the real one is 87.
+  Core.whiteRef(state, 87);
+  assert.equal(state.currentWR, 87);
+  assert.equal(state.nextFileNum, 88);
+  assert.deepEqual(state.events.map(function (e) { return e.action; }),
+    ['discard', 'discard', 'white_ref']);
+  assert.deepEqual(state.events.slice(0, 2).map(function (e) { return e.file_num; }),
+    ['85', '86']);
+  assert.equal(state.events[2].note, '2 unaccounted before this WR');
+  Core.confirm(state);
+  assert.equal(state.plan[0].WRNum, '87');
+});
+
+test('a white reference confirmed lower than expected notes it and resyncs', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-a.csv', { config: { startFileNum: 90 } });
+  Core.whiteRef(state, 88);
+  assert.equal(state.nextFileNum, 89);
+  assert.equal(state.events[0].note, 'app was ahead by 2');
+});
+
+test('confirming the white reference number is itself the reconcile', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-partial.csv');
+  assert.equal(state.needsReconcile, true);
+  Core.whiteRef(state, 110);
+  assert.equal(state.needsReconcile, false, 'the WR step should settle the counter');
+});
+
+test('a white reference is one undoable action, gap discards and all', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-a.csv', { config: { startFileNum: 85 } });
+  Core.whiteRef(state, 88);
+  Core.undo(state);
+  assert.equal(state.nextFileNum, 85);
+  assert.equal(state.currentWR, null);
+  assert.equal(state.events.length, 0);
+});
+
 test('wrConsumesFileNumber:false leaves the counter alone', function () {
   const Core = loadCore();
   const state = session(Core, 'plan-a.csv', {
@@ -687,7 +729,7 @@ const ACTIONS = {
   confirm: function (C, s) { return C.confirm(s); },
   overwrite: function (C, s) { return C.overwrite(s); },
   discard: function (C, s, reason) { return C.discard(s, reason); },
-  whiteRef: function (C, s) { return C.whiteRef(s); },
+  whiteRef: function (C, s, fileNum) { return C.whiteRef(s, fileNum); },
   comment: function (C, s, text) { return C.setComment(s, text); },
   meta: function (C, s, meta) { return C.setMeta(s, meta); },
   reconcile: function (C, s, actual, choice) { return C.reconcile(s, actual, choice); },

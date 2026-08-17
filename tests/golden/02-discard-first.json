@@ -4,7 +4,7 @@
   "config": { "startFileNum": 0 },
   "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
   "actions": [
-    ["discard", "test scan before starting"],
+    ["discard"],
     ["confirm"],
     ["confirm"]
   ]

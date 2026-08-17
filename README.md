@@ -25,12 +25,16 @@ storage. No server, no network, no install. It never makes a network request.
 |---|---|
 | CONFIRM | The scan you just took belongs to this row |
 | OVERWRITE | Same button on a row that already has a number - reassigns it deliberately |
-| WR | White reference taken. Burns a file number and asks you to reconcile |
-| DISCARD | The scan was junk. Burns the number, stays on the row |
+| WR | White reference taken. Confirm which file number it is - that step is the reconcile |
+| DISCARD | The scan was junk. One tap: burns the number, stays on the row |
 | NOTE | Free text into the `comments` column |
 | UNDO / REDO | At least 20 actions deep, and undo leaves no trace in the log |
-| LAST / NEXT | Move the cursor only - for skipping a row and coming back |
+| PREV / NEXT | Move the cursor only - for skipping a row and coming back |
 | NEXT FILE (the big number) | Tap to reconcile against the instrument any time |
+
+Dark mode is on the opening screen and in the `[=]` menu mid-session. Light is
+the default - that is what a glasshouse in full sun needs - and the choice is
+remembered separately from the session.
 
 Set the device's screen timeout to never before a session.
 
@@ -41,8 +45,10 @@ the instrument, type it in. If it matches, that is two seconds well spent. If it
 does not, the app shows the gap in words and offers to log the missing numbers
 as discards and resynchronise.
 
-It prompts automatically at every white reference and whenever a part-filled
-plan is loaded, because those are where numbering goes wrong.
+It prompts whenever a part-filled plan is loaded, and taking a white reference
+is itself a reconcile - the app asks which file number the WR is rather than
+assuming, since WRs get re-taken too. Anything skipped on the way is logged as
+discards.
 
 ### Getting the data out
 
@@ -101,7 +107,8 @@ What is left, in the order worth suspecting if an old device misbehaves:
 
 1. `Object.assign` - the one ES2015 library function used. A guarded shim is
    about five lines.
-2. CSS custom properties (`var(--…)`) - would need inlining.
+2. CSS custom properties (`var(--…)`) - would need inlining, and dark mode is
+   built on them, so it would have to go or be rebuilt as a second stylesheet.
 3. `clamp()` in font sizes - already written with a plain fallback declared
    first, so a parser that does not understand it keeps a usable size.
 4. `env(safe-area-inset-bottom)` - degrades to zero padding on its own.

@@ -20,12 +20,40 @@
   --muted: #57626e;
   --line: #c3ccd6;
   --panel: #eef2f6;
+  --field: #ffffff;
   --go: #0b6b3a;
   --go-ink: #ffffff;
   --overwrite: #8a4b00;
   --danger: #8c1c13;
   --wr: #14476b;
   --focus: #0b6b3a;
+  --ok-bg: #e6f4ea;
+  --bad-bg: #fdecea;
+  --warn-bg: #fff6e5;
+  --scrim: rgba(17, 20, 24, 0.55);
+}
+
+/*
+  Dark mode is an explicit choice, not a guess: the toggle wins, and the system
+  preference only seeds the first run. Light stays the default in sunlight.
+*/
+:root[data-theme="dark"] {
+  --bg: #12161a;
+  --ink: #e9eef3;
+  --muted: #98a5b2;
+  --line: #39434e;
+  --panel: #1b2229;
+  --field: #10151a;
+  --go: #2f9e63;
+  --go-ink: #06120b;
+  --overwrite: #d3902f;
+  --danger: #e2705f;
+  --wr: #6bb3e0;
+  --focus: #2f9e63;
+  --ok-bg: #10291b;
+  --bad-bg: #2c1512;
+  --warn-bg: #2b2110;
+  --scrim: rgba(0, 0, 0, 0.66);
 }
 
 * { box-sizing: border-box; }
@@ -72,7 +100,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 input, select {
   font: inherit;
   color: inherit;
-  background: #fff;
+  background: var(--field);
   border: 1px solid var(--line);
   border-radius: 6px;
   min-height: 48px;
@@ -108,7 +136,7 @@ input, select {
 }
 
 .error {
-  background: #fdecea;
+  background: var(--bad-bg);
   border: 1px solid var(--danger);
   color: var(--danger);
   border-radius: 6px;
@@ -275,8 +303,8 @@ input, select {
   font-size: 16px;
   font-weight: 600;
 }
-.verdict.ok { background: #e6f4ea; border: 1px solid var(--go); color: var(--go); }
-.verdict.bad { background: #fdecea; border: 1px solid var(--danger); color: var(--danger); }
+.verdict.ok { background: var(--ok-bg); border: 1px solid var(--go); color: var(--go); }
+.verdict.bad { background: var(--bad-bg); border: 1px solid var(--danger); color: var(--danger); }
 .verdict .detail { font-weight: 400; font-size: 14px; margin-top: 6px; color: var(--ink); }
 
 textarea.note {
@@ -333,7 +361,7 @@ textarea.note {
 
 .warn-list { margin: 0 0 12px; padding: 0; list-style: none; }
 .warn-list li {
-  background: #fff6e5;
+  background: var(--warn-bg);
   border: 1px solid var(--overwrite);
   color: var(--overwrite);
   border-radius: 6px;
@@ -342,7 +370,7 @@ textarea.note {
   font-size: 14px;
 }
 .warn-ok {
-  background: #e6f4ea;
+  background: var(--ok-bg);
   border: 1px solid var(--go);
   color: var(--go);
   border-radius: 6px;
@@ -356,7 +384,7 @@ textarea.note {
 #sheet {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(17, 20, 24, 0.55);
+  background: var(--scrim);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -483,6 +511,11 @@ textarea.note {
       <label for="in-wr-consumes">A white reference writes its own file</label>
     </div>
 
+    <div class="field check">
+      <input type="checkbox" id="in-dark">
+      <label for="in-dark">Dark mode</label>
+    </div>
+
     <button id="btn-start" class="primary" disabled>START SESSION</button>
 
     <div class="field" style="margin-top:18px">
@@ -516,7 +549,7 @@ textarea.note {
     <div id="next-up"></div>
 
     <div id="nav-row">
-      <button id="btn-last">LAST</button>
+      <button id="btn-prev">PREV</button>
       <button id="btn-next">NEXT</button>
     </div>
 
@@ -525,8 +558,8 @@ textarea.note {
     <div id="secondary-row">
       <button id="btn-wr" class="wr">WR</button>
       <button id="btn-discard" class="danger">DISCARD</button>
-      <button id="btn-redo">REDO</button>
       <button id="btn-note">NOTE</button>
+      <button id="btn-redo">REDO</button>
       <button id="btn-undo" class="undo">UNDO</button>
     </div>
   </section>
@@ -1008,18 +1041,52 @@ textarea.note {
 
   // White reference. Consumes a file number in the current SVC workflow;
   // config.wrConsumesFileNumber turns that off for SVCScan.
-  function whiteRef(state) {
+  //
+  // fileNum is the number the operator has confirmed the WR actually is -
+  // white references get re-taken like any other scan, so it is not always the
+  // number the app expected. Confirming it here IS the reconcile: anything
+  // skipped on the way is logged as discards, exactly as the reconcile box
+  // would, and nothing needs to ask again afterwards. Omit it to accept the
+  // number the app expects.
+  function whiteRef(state, fileNum) {
     return transact(state, 'white_ref', function (ctx) {
-      var num = null;
-      if (state.config.wrConsumesFileNumber) {
-        num = state.nextFileNum;
-        state.currentWR = num;
-        state.nextFileNum = num + 1;
+      if (!state.config.wrConsumesFileNumber) {
+        // SVCScan: the reference writes no file, so there is no number to
+        // confirm and the counter does not move.
+        ctx.log('white_ref', {
+          plan_row_index: state.cursor,
+          note: 'no file written'
+        });
+        return null;
       }
+
+      var expected = state.nextFileNum;
+      var num = (fileNum === undefined || fileNum === null) ? expected : fileNum;
+      var note = '';
+
+      if (num > expected) {
+        // Files exist between what the app expected and the WR the operator is
+        // looking at. Same treatment as a reconcile gap: they become data.
+        for (var skipped = expected; skipped < num; skipped++) {
+          ctx.log('discard', {
+            file_num: skipped,
+            plan_row_index: state.cursor,
+            note: 'unaccounted at white reference'
+          });
+        }
+        note = (num - expected) + ' unaccounted before this WR';
+      } else if (num < expected) {
+        note = 'app was ahead by ' + (expected - num);
+      }
+
+      state.currentWR = num;
+      state.nextFileNum = num + 1;
+      state.needsReconcile = false;
+
       ctx.log('white_ref', {
         file_num: num,
         plan_row_index: state.cursor,
-        note: state.config.wrConsumesFileNumber ? '' : 'no file written'
+        note: note
       });
       return num;
     });
@@ -1491,6 +1558,37 @@ textarea.note {
     try { window.localStorage.removeItem(STORE_KEY); } catch (clearError) { /* nothing to do */ }
   }
 
+  // ----------------------------------------------------------------- theme
+
+  // Kept apart from the session: the operator's eyes do not reset when the
+  // plan does, so Start Fresh must not throw the theme away.
+  var THEME_KEY = 'svc-fieldnotes.theme';
+  var theme = 'light';
+
+  function applyTheme(next) {
+    theme = next === 'dark' ? 'dark' : 'light';
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    $('in-dark').checked = theme === 'dark';
+    try { window.localStorage.setItem(THEME_KEY, theme); } catch (themeError) { /* nothing to do */ }
+  }
+
+  (function initTheme() {
+    var saved = null;
+    try { saved = window.localStorage.getItem(THEME_KEY); } catch (readError) { saved = null; }
+    if (saved !== 'dark' && saved !== 'light') {
+      // Only seeds the first run. Light is the default in sunlight.
+      saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'dark' : 'light';
+    }
+    applyTheme(saved);
+  })();
+
+  on($('in-dark'), 'change', function () { applyTheme($('in-dark').checked ? 'dark' : 'light'); });
+
   // ----------------------------------------------------------- start screen
 
   function setStartError(message) {
@@ -1687,7 +1785,7 @@ textarea.note {
     confirmBtn.className = filled ? 'overwrite' : '';
     confirmBtn.disabled = state.plan.length === 0;
 
-    $('btn-last').disabled = state.cursor <= 0;
+    $('btn-prev').disabled = state.cursor <= 0;
     $('btn-next').disabled = state.cursor >= state.plan.length - 1;
     $('btn-undo').disabled = !Core.canUndo(state);
     $('btn-redo').disabled = !Core.canRedo(state);
@@ -1746,7 +1844,7 @@ textarea.note {
   });
 
   on($('btn-next'), 'click', function () { Core.moveCursor(state, 1); render(); save(); });
-  on($('btn-last'), 'click', function () { Core.moveCursor(state, -1); render(); save(); });
+  on($('btn-prev'), 'click', function () { Core.moveCursor(state, -1); render(); save(); });
 
   on($('btn-undo'), 'click', function () {
     if (!Core.canUndo(state)) { return; }
@@ -1761,34 +1859,53 @@ textarea.note {
     afterAction();
   });
 
-  // A white reference is where numbering most often goes sideways, so it
-  // always ends in a reconcile prompt.
+  // The operator confirms which file the white reference actually is - WRs get
+  // re-taken too, and a WR is the first thing captured before any data, so
+  // this is the cheapest possible place to catch drift. This step IS the
+  // reconcile; nothing asks again afterwards.
   on($('btn-wr'), 'click', function () {
-    var record = Core.whiteRef(state);
-    afterAction();
-    var taken = record.result;
-    openReconcile(taken === null
-      ? 'White reference logged (no file written).'
-      : 'White reference is file ' + taken + '.');
-  });
+    if (!state.config.wrConsumesFileNumber) {
+      // The reference writes no file, so there is no number to confirm - but
+      // drift can still have happened, so ask the ordinary way.
+      Core.whiteRef(state);
+      afterAction();
+      openReconcile('White reference logged (no file written).');
+      return;
+    }
 
-  on($('btn-discard'), 'click', function () {
-    openSheet('Discard file ' + state.nextFileNum, function (body) {
+    openSheet('White reference', function (body) {
       body.appendChild(el('p', 'sheet-note',
-        'The file exists on the instrument but is junk. The number is burned and logged; the cursor stays put.'));
-      var reason = el('input');
-      reason.setAttribute('type', 'text');
-      reason.setAttribute('placeholder', 'reason (optional)');
-      body.appendChild(reason);
-      body.appendChild(el('div', null, ' '));
-      var go = el('button', 'primary', 'DISCARD');
+        'Which file number is the white reference? The app expects ' + state.nextFileNum +
+        '. Change it if the WR was re-taken - anything skipped gets logged.'));
+
+      var input = el('input', 'big-input');
+      input.setAttribute('type', 'number');
+      input.setAttribute('inputmode', 'numeric');
+      input.setAttribute('step', '1');
+      input.value = String(state.nextFileNum);
+      body.appendChild(input);
+
+      var go = el('button', 'primary', 'CONFIRM WR');
       on(go, 'click', function () {
-        Core.discard(state, reason.value);
+        var num = parseInt(input.value, 10);
+        if (isNaN(num)) { return; }
+        Core.whiteRef(state, num);
         closeSheet();
         afterAction();
       });
       body.appendChild(go);
+      input.focus();
+      input.select();
     });
+  });
+
+  // One tap. Anything worth saying about a discard goes in the note.
+  on($('btn-discard'), 'click', function () {
+    var now = Date.now();
+    if (now - lastActionAt < 300) { return; }
+    lastActionAt = now;
+    Core.discard(state);
+    afterAction();
   });
 
   on($('btn-note'), 'click', function () {
@@ -2125,6 +2242,12 @@ textarea.note {
       sheetButton(body, 'Date, Prefix, Subfolder', function () { closeSheet(); openMeta(); });
       sheetButton(body, 'Check plan', function () { closeSheet(); openCheck(); });
       sheetButton(body, 'Export', function () { closeSheet(); openExport(); });
+      var themeButton = sheetButton(body,
+        theme === 'dark' ? 'Dark mode: ON' : 'Dark mode: OFF',
+        function () {
+          applyTheme(theme === 'dark' ? 'light' : 'dark');
+          themeButton.textContent = theme === 'dark' ? 'Dark mode: ON' : 'Dark mode: OFF';
+        });
       sheetButton(body, 'End session', function () {
         closeSheet();
         openSheet('End session', function (inner) {

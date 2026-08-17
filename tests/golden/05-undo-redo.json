@@ -10,7 +10,7 @@
     ["undo"],
     ["undo"],
     ["redo"],
-    ["discard", "wrong plant"],
+    ["discard"],
     ["redo"],
     ["confirm"]
   ]

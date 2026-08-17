@@ -129,18 +129,18 @@ separate "type a number" path outside the reconcile box.
 |---|---|---|---|
 | **Confirm** | +1 | next unfilled row | Only on unfilled rows. Assigns `nextFileNum` to `plan[cursor].FileNum`. Stamps `WRNum` only if `currentWR` changed since the last written row. 300ms debounce against double-taps. |
 | **Overwrite** | +1 | next unfilled row | Only on filled rows (the Confirm button relabels). The row's old `FileNum` goes to the log as a discard note; the row is reassigned the displayed number. |
-| **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. Optional reason. |
-| **White reference** | +1 if `config.wrConsumesFileNumber` else 0 | unchanged | Sets `currentWR`; the next Confirm stamps it into `WRNum`. Triggers the reconcile prompt (section 5). |
+| **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. One tap, no prompt - anything worth saying about it goes in the note. |
+| **White reference** | to the confirmed number +1, if `config.wrConsumesFileNumber`; else 0 | unchanged | The operator confirms which file number the WR actually is - WRs get re-taken too. Sets `currentWR`; the next Confirm stamps it into `WRNum`. Any numbers skipped on the way are logged as discards. This step **is** the reconcile (section 5). |
 | **Undo** | restore | restore | Reverses the last action exactly, removes its log entries, and pushes the whole lot onto `redoStack`. Leaves no log entry of its own. |
 | **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly, log entries included. Any new action clears `redoStack` and disables Redo. |
-| **Next/Last row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
+| **Next/Prev row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
 | **Jump** | unchanged | to chosen row | Opens the full-screen row list (section 6). |
 | **Comment** | unchanged | unchanged | Free text on the current row. Always quoted in output, newlines preserved. |
 | **Edit meta** | unchanged | unchanged | Set or change `Date`, `Prefix`, `Subfolder`. Written on the current row only; other rows stay blank for downstream imputation. |
 
 No "confirm and stay" variant for the tech_rep pairs: the walk order in the plan
 matches the physical sampling pattern, so plain sequential confirms are correct, and
-Next/Last row covers the exceptions.
+Next/Prev row covers the exceptions.
 
 ### Undo/redo must be real stacks
 
@@ -160,9 +160,14 @@ off the instrument and types it into the Reconcile box.
 
 Reconcile is prompted:
 
-- **At every white reference.** WRs are where numbering most often goes sideways, and a
-  WR is the first thing captured before any actual data - catching drift there costs
-  minutes instead of a plate.
+- **At every white reference**, as part of taking it. WRs are where numbering most
+  often goes sideways, and a WR is the first thing captured before any actual data -
+  catching drift there costs minutes instead of a plate. Rather than confirming the WR
+  and then asking a second question, the app asks the only question that matters:
+  which file number is this white reference? Confirming it settles the counter, so
+  there is nothing left to reconcile afterwards. A WR that does not write a file
+  (`wrConsumesFileNumber: false`) has no number to confirm, so it prompts the ordinary
+  reconcile box instead.
 - **Immediately after loading a partly-filled CSV** without session JSON (section 3).
 - **On demand**, by tapping the big `NEXT FILE` display.
 
@@ -197,13 +202,13 @@ Portrait first, landscape supported.
 +------------------------------------------+
 |  next up:  row 5 / range 8  /  Q2Pos C4  |  greyed, one line
 +------------------------------------------+
-| [ LAST ]                      [ NEXT ]   |  cursor nav, >=48dp targets
+| [ PREV ]                      [ NEXT ]   |  cursor nav, >=48dp targets
 +------------------------------------------+
 |                                          |
 |             C O N F I R M                |  ~25% of screen height, thumb zone
 |                                          |
 +------------------------------------------+
-| WR | DISCARD | REDO | NOTE | UNDO        |  secondary row, >=48dp targets
+| WR | DISCARD | NOTE | REDO | UNDO        |  secondary row, >=48dp targets
 +------------------------------------------+
 ```
 
@@ -220,14 +225,15 @@ Notes on the layout:
 - `NEXT FILE` is deliberately huge so it can be eyeballed against the instrument's own
   display between reconcile prompts. Bare integer, no padding - easier to read at a
   glance.
-- LAST/NEXT move the cursor without touching `nextFileNum` - for skipping a row (or
+- PREV/NEXT move the cursor without touching `nextFileNum` - for skipping a row (or
   several) and coming back. They sit apart from the secondary row so they are never
   confused with Undo.
 - The Confirm button relabels to OVERWRITE when the cursor sits on an already-filled
   row (after a Jump or Last), so re-assigning a row is deliberate, not accidental.
 - Undo sits next to the destructive-ish buttons on purpose. It should be the easiest
   recovery in the app.
-- The `[=]` menu holds Jump, Edit meta, export, and session management.
+- The `[=]` menu holds Jump, Edit meta, export, the dark mode toggle, and session
+  management.
 - No quick-tag comment chips: common comments change from project to project, so the
   keyboard stays.
 
@@ -268,6 +274,10 @@ correct:
   filenames - that is derived downstream too.
 - Initial `Date`, `Prefix`, `Subfolder` - entered at session start, written on the
   first row. Changed mid-session via Edit meta (e.g. at instrument battery swaps).
+- Dark mode (bool) - set on the opening screen or toggled from the menu mid-session.
+  Light is the default, because that is what a glasshouse in full sun needs; the
+  system preference only seeds the first run, and an explicit choice always wins.
+  Stored apart from the session, so Start Fresh does not reset it.
 
 ## 9. Validation
 
@@ -301,7 +311,7 @@ Other constraints:
 1. **M1** - Load CSV, render the target card, Confirm, export plan CSV. This alone
    replaces the spreadsheet. Ship it and use it for one plate before building anything
    else.
-2. **M2** - Autosave + resume, Discard, White reference with reconcile prompt,
+2. **M2** - Autosave + resume, Discard, White reference with its number confirmed,
    Overwrite, Undo/Redo stacks, comments, event log export. (Autosave is early because
    losing a plate to a browser kill is the exact failure mode this app exists to
    prevent.)

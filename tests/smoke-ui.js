@@ -56,7 +56,9 @@ while ((m = idRe.exec(html)) !== null) {
 ['sheet', 'screen-main', 'resume-box', 'start-error', 'card-wr', 'card-filled', 'card-comment']
   .forEach(id => nodes.get(id).setAttribute('hidden', ''));
 
+const docEl = makeNode('html', 'html');
 global.document = {
+  documentElement: docEl,
   getElementById: id => nodes.get(id) || null,
   createElement: tag => makeNode('', tag),
   createTextNode: t => ({ _text: t, textContent: t }),
@@ -72,6 +74,7 @@ global.window = {
     removeItem: k => { delete store[k]; }
   },
   URL: { createObjectURL: () => 'blob:fake' },
+  matchMedia: () => ({ matches: false }),
   location: { reload: () => { throw new Error('reload called'); } }
 };
 global.Blob = function (parts) { this.parts = parts; };
@@ -150,35 +153,45 @@ nodes.get('btn-redo').click();
 check('redo re-applies', nodes.get('next-file-num').textContent === '86',
   nodes.get('next-file-num').textContent);
 
-// White reference opens the reconcile sheet.
+// White reference asks which file it actually is - that step is the reconcile.
 nodes.get('btn-wr').click();
 check('WR opens a sheet', !nodes.get('sheet').hasAttribute('hidden'));
-check('sheet is the reconcile one', nodes.get('sheet-title').textContent === 'Reconcile',
+check('sheet asks about the white reference',
+  nodes.get('sheet-title').textContent === 'White reference',
   nodes.get('sheet-title').textContent);
-const sheetBody = nodes.get('sheet-body');
-const numberInput = sheetBody.children.find(c => c.className === 'big-input');
-check('reconcile prefills the expected number', numberInput && numberInput.value === '87',
-  numberInput && numberInput.value);
+const wrBody = nodes.get('sheet-body');
+const wrInput = wrBody.children.find(c => c.className === 'big-input');
+check('WR prefills the expected number', wrInput && wrInput.value === '86',
+  wrInput && wrInput.value);
 
-// Mismatch: instrument is 3 ahead.
-numberInput.value = '90';
-const actionsBox = sheetBody.children[sheetBody.children.length - 1];
-const checkBtn = actionsBox.children.find(c => c.textContent === 'CHECK');
-checkBtn.click();
-const resyncBtn = actionsBox.children.find(c => /LOG 3 DISCARDS/.test(c.textContent));
-check('mismatch offers to log the gap', !!resyncBtn,
-  actionsBox.children.map(c => c.textContent).join(' | '));
-resyncBtn.click();
-check('resync moves the counter', nodes.get('next-file-num').textContent === '90',
-  nodes.get('next-file-num').textContent);
-check('sheet closed after resync', nodes.get('sheet').hasAttribute('hidden'));
+// The WR was re-taken twice, so it is really 88 - 86 and 87 are unaccounted.
+wrInput.value = '88';
+wrBody.children.find(c => c.textContent === 'CONFIRM WR').click();
+check('confirming the WR moves the counter past it',
+  nodes.get('next-file-num').textContent === '89', nodes.get('next-file-num').textContent);
+check('sheet closed after the WR', nodes.get('sheet').hasAttribute('hidden'));
+check('no reconcile prompt follows the WR', nodes.get('sheet').hasAttribute('hidden'));
 
-// Discard.
+// Discard is one tap now.
 nodes.get('btn-discard').click();
-const discardBody = nodes.get('sheet-body');
-discardBody.children.find(c => c.attrs && c.attrs.placeholder).value = 'bad scan';
-discardBody.children.find(c => c.textContent === 'DISCARD').click();
-check('discard burns a number', nodes.get('next-file-num').textContent === '91',
+check('discard burns a number without asking',
+  nodes.get('next-file-num').textContent === '90', nodes.get('next-file-num').textContent);
+check('discard opened no sheet', nodes.get('sheet').hasAttribute('hidden'));
+
+// Reconcile is still available on demand from the big number.
+nodes.get('next-file').click();
+check('tapping NEXT FILE opens reconcile',
+  nodes.get('sheet-title').textContent === 'Reconcile', nodes.get('sheet-title').textContent);
+const recBody = nodes.get('sheet-body');
+const recInput = recBody.children.find(c => c.className === 'big-input');
+recInput.value = '93';
+const recActions = recBody.children[recBody.children.length - 1];
+recActions.children.find(c => c.textContent === 'CHECK').click();
+const resyncBtn = recActions.children.find(c => /LOG 3 DISCARDS/.test(c.textContent));
+check('mismatch offers to log the gap', !!resyncBtn,
+  recActions.children.map(c => c.textContent).join(' | '));
+resyncBtn.click();
+check('resync moves the counter', nodes.get('next-file-num').textContent === '93',
   nodes.get('next-file-num').textContent);
 
 // Jump list.
@@ -213,6 +226,24 @@ check('every export block has a download and a text box',
 check('filenames are timestamped',
   blocks.every(b => /_\d{8}-\d{6}\./.test(b.children.find(c => c.attrs && c.attrs.download).attrs.download)),
   blocks.map(b => (b.children.find(c => c.attrs && c.attrs.download) || {}).attrs.download).join(' '));
+
+// Dark mode: start-screen checkbox and the in-session menu toggle drive the
+// same setting, and it persists apart from the session.
+check('theme starts light', docEl.getAttribute('data-theme') === null,
+  docEl.getAttribute('data-theme'));
+nodes.get('in-dark').checked = true;
+nodes.get('in-dark').dispatchEvent({ type: 'change', target: nodes.get('in-dark') });
+check('dark mode sets the theme attribute', docEl.getAttribute('data-theme') === 'dark');
+check('dark mode persists', store['svc-fieldnotes.theme'] === 'dark');
+
+nodes.get('btn-menu').click();
+const themeBtn = nodes.get('sheet-body').children.find(c => /Dark mode:/.test(c.textContent));
+check('menu shows the current theme', themeBtn.textContent === 'Dark mode: ON',
+  themeBtn.textContent);
+themeBtn.click();
+check('menu toggle turns it back off', docEl.getAttribute('data-theme') === null &&
+  themeBtn.textContent === 'Dark mode: OFF', themeBtn.textContent);
+nodes.get('btn-sheet-close').click();
 
 Date.now = realNow;
 console.log(process.exitCode ? '\nsmoke test FAILED' : '\nsmoke test passed');

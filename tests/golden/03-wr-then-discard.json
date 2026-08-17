@@ -1,13 +1,12 @@
 {
-  "description": "White reference, immediately followed by a discard, then capture. WRNum lands once.",
+  "description": "A white reference that had to be re-taken (app expected 86, the real one is 88), immediately followed by a discard. The two skipped files become data, and WRNum lands once.",
   "fixture": "plan-a.csv",
   "config": { "startFileNum": 85 },
   "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
   "actions": [
     ["confirm"],
-    ["whiteRef"],
-    ["reconcile", 87, "accept"],
-    ["discard", "moved during scan"],
+    ["whiteRef", 88],
+    ["discard"],
     ["confirm"],
     ["confirm"]
   ]
