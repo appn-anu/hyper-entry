@@ -596,8 +596,9 @@ textarea.note {
   var CAPTURE_COLS = ['FileNum', 'comments'];
   // Columns written only where the value changes; downstream forward-fills them.
   var TRACKED_COLS = ['WRNum', 'Date', 'Prefix', 'Subfolder'];
-  // Without these there is nothing to fill, or nothing to file it under.
-  var REQUIRED_COLS = ['FileNum', 'Date', 'Prefix', 'Subfolder'];
+  // Without these there is nothing to fill, nothing to file it under, and no
+  // place for a note to land on the exported plan.
+  var REQUIRED_COLS = ['FileNum', 'Date', 'Prefix', 'Subfolder', 'comments'];
 
   var DEFAULT_CONFIG = {
     wrConsumesFileNumber: true,
@@ -776,6 +777,14 @@ textarea.note {
       throw err;
     }
 
+    if (!parsed.rows.length) {
+      // A valid header with nothing under it would start a live session where
+      // Discard burns numbers against no rows at all.
+      var err = new Error('The plan has no data rows - nothing to fill.');
+      err.code = 'EMPTY_PLAN';
+      throw err;
+    }
+
     var config = Object.assign({}, DEFAULT_CONFIG, opts.config || {});
     var plan = parsed.rows;
     var maxFilled = highestFileNum(plan);
@@ -800,7 +809,7 @@ textarea.note {
       // A partly-filled CSV hides trailing discards and WRs from the earlier
       // session, so the counter is a guess until the operator checks it.
       needsReconcile: partlyFilled,
-      startedAt: opts.now || nowISO()
+      startedAt: opts.now || nowLocal()
     };
 
     state.cursor = firstUnfilled(state);
@@ -821,7 +830,19 @@ textarea.note {
     return state;
   }
 
-  function nowISO() { return new Date().toISOString(); }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  // Local time, ISO-8601 with the local offset: the event log reads in the
+  // same clock the operator's day runs on. Manual formatting, no locales.
+  function nowLocal() {
+    var d = new Date();
+    var off = -d.getTimezoneOffset();
+    var sign = off < 0 ? '-' : '+';
+    off = Math.abs(off);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+      'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) +
+      sign + pad2(Math.floor(off / 60)) + ':' + pad2(off % 60);
+  }
 
   // ------------------------------------------------------------- events ----
 
@@ -829,7 +850,7 @@ textarea.note {
     state.eventSeq += 1;
     var ev = {
       id: state.eventSeq,
-      timestamp: fields.timestamp || nowISO(),
+      timestamp: fields.timestamp || nowLocal(),
       action: action,
       file_num: fields.file_num == null ? '' : String(fields.file_num),
       plan_row_index: fields.plan_row_index == null ? '' : String(fields.plan_row_index),
@@ -1106,23 +1127,31 @@ textarea.note {
   }
 
   // Date / Prefix / Subfolder. Lands on the current row only; every other row
-  // stays blank for downstream forward-fill.
+  // stays blank for downstream forward-fill. A save that changes nothing is
+  // not an action: no transaction, no undo entry, no log row.
   function setMeta(state, meta) {
+    var changed = [];
+    for (var i = 0; i < TRACKED_COLS.length; i++) {
+      var col = TRACKED_COLS[i];
+      if (col === 'WRNum') { continue; }
+      if (!Object.prototype.hasOwnProperty.call(meta, col)) { continue; }
+      var value = meta[col] == null ? '' : String(meta[col]);
+      if (value === state.meta[col]) { continue; }
+      changed.push(col);
+    }
+    if (!changed.length) { return null; }
+
     return transact(state, 'meta', function (ctx) {
-      var changed = [];
-      for (var i = 0; i < TRACKED_COLS.length; i++) {
-        var col = TRACKED_COLS[i];
-        if (col === 'WRNum') { continue; }
-        if (!Object.prototype.hasOwnProperty.call(meta, col)) { continue; }
-        var value = meta[col] == null ? '' : String(meta[col]);
-        if (value === state.meta[col]) { continue; }
-        state.meta[col] = value;
-        changed.push(col + '=' + value);
+      var note = [];
+      for (var j = 0; j < changed.length; j++) {
+        var col = changed[j];
+        state.meta[col] = meta[col] == null ? '' : String(meta[col]);
+        note.push(col + '=' + state.meta[col]);
       }
-      if (changed.length) { stampTracked(state, ctx, state.cursor); }
+      stampTracked(state, ctx, state.cursor);
       ctx.log('meta', {
         plan_row_index: state.cursor,
-        note: changed.join('; ')
+        note: note.join('; ')
       });
       return changed;
     });
@@ -1518,6 +1547,8 @@ textarea.note {
   var state = null;
   var loaded = null;      // { fileName, parsed } waiting for the start options
   var lastActionAt = 0;   // 300ms guard against double-taps on CONFIRM
+  var lastUndoAt = 0;     // same guard per button, so undo never blocks redo
+  var lastRedoAt = 0;
 
   function $(id) { return document.getElementById(id); }
   function on(el, ev, fn) { el.addEventListener(ev, fn, false); }
@@ -1621,6 +1652,9 @@ textarea.note {
           // The one hard stop in the app: without these there is nothing to fill.
           throw new Error('Missing required column(s): ' + missing.join(', ') +
             '\nThis plan cannot be used until they are present.');
+        }
+        if (!parsed.rows.length) {
+          throw new Error('This plan has no data rows - nothing to fill.');
         }
         loaded = { fileName: file.name, parsed: parsed };
         setStartError('');
@@ -1848,6 +1882,9 @@ textarea.note {
 
   on($('btn-undo'), 'click', function () {
     if (!Core.canUndo(state)) { return; }
+    var now = Date.now();
+    if (now - lastUndoAt < 300) { return; }  // a bounced tap is not two undos
+    lastUndoAt = now;
     Core.undo(state);
     lastActionAt = 0;   // undo must never be swallowed by the confirm guard
     afterAction();
@@ -1855,6 +1892,9 @@ textarea.note {
 
   on($('btn-redo'), 'click', function () {
     if (!Core.canRedo(state)) { return; }
+    var now = Date.now();
+    if (now - lastRedoAt < 300) { return; }  // a bounced tap is not two redos
+    lastRedoAt = now;
     Core.redo(state);
     afterAction();
   });
@@ -1955,27 +1995,35 @@ textarea.note {
       var actions = el('div');
       body.appendChild(actions);
 
-      var check = el('button', 'primary', 'CHECK');
-      on(check, 'click', function () {
+      // No CHECK step: the verdict and the buttons follow the field as it is
+      // typed, so a different number turns the primary button into the resync
+      // action on the spot - what is tapped is always what is on screen, and
+      // a bounce cannot land on a button that has just appeared underneath.
+      function refresh() {
         var actual = parseInt(input.value, 10);
-        if (isNaN(actual)) { return; }
-        var result = Core.reconcileCheck(state, actual);
+        clear(verdict);
         clear(actions);
-        show(verdict, true);
+        show(verdict, false);
+        if (isNaN(actual)) { return; }
+
+        var result = Core.reconcileCheck(state, actual);
 
         if (result.match) {
           verdict.className = 'verdict ok';
           verdict.textContent = '✓ Match - carry on.';
-          Core.reconcile(state, actual, 'accept');
-          afterAction();
+          show(verdict, true);
           var done = el('button', 'primary', 'BACK TO WORK');
-          on(done, 'click', closeSheet);
+          on(done, 'click', function () {
+            Core.reconcile(state, actual, 'accept');
+            lastActionAt = Date.now();   // a bounce through the closing sheet
+            closeSheet();                // must not land on CONFIRM
+            afterAction();
+          });
           actions.appendChild(done);
           return;
         }
 
         verdict.className = 'verdict bad';
-        clear(verdict);
         verdict.appendChild(document.createTextNode(
           result.gap > 0
             ? 'Instrument says ' + actual + ', app expects ' + result.expected +
@@ -1985,13 +2033,15 @@ textarea.note {
         verdict.appendChild(el('div', 'detail', result.gap > 0
           ? 'Logging them as discards keeps every file on the instrument accounted for.'
           : 'The app counted files the instrument never wrote. Resyncing will reuse those numbers.'));
+        show(verdict, true);
 
         var accept = el('button', 'primary', result.gap > 0
           ? 'LOG ' + result.gap + ' DISCARD' + (result.gap === 1 ? '' : 'S') + ' AND RESYNC'
           : 'RESYNC TO ' + actual);
         on(accept, 'click', function () {
           Core.reconcile(state, actual, 'accept');
-          closeSheet();
+          lastActionAt = Date.now();   // a bounce through the closing sheet
+          closeSheet();                // must not land on CONFIRM
           afterAction();
         });
         actions.appendChild(accept);
@@ -1999,12 +2049,15 @@ textarea.note {
         var note = el('button', 'sheet-btn', 'JUST NOTE IT, DO NOT RESYNC');
         on(note, 'click', function () {
           Core.reconcile(state, actual, 'note');
-          closeSheet();
+          lastActionAt = Date.now();   // a bounce through the closing sheet
+          closeSheet();                // must not land on CONFIRM
           afterAction();
         });
         actions.appendChild(note);
-      });
-      actions.appendChild(check);
+      }
+
+      on(input, 'input', refresh);
+      refresh();
       input.focus();
       input.select();
     });

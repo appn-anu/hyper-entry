@@ -1,18 +1,15 @@
 # SVC Field Notes
 
 A single-file web app for recording SVC spectroradiometer file numbers against a
-pre-planned measurement list. Replaces the Excel field-notes sheet.
+pre-planned measurement list. 
 
 The point of it: **the operator should almost never type a file number.** The app
 tracks the counter, the operator confirms or says what went wrong.
 
-See [`svc-fieldnotes-spec.md`](svc-fieldnotes-spec.md) for the reasoning behind
-every decision here. This file is just how to run it.
-
 ## Using it
 
 Copy `svc-fieldnotes.html` onto the phone or tablet and open it from local
-storage. No server, no network, no install. It never makes a network request.
+storage.
 
 1. Load the day's plan CSV. It needs `FileNum`, `Date`, `Prefix` and `Subfolder`
    columns - a missing one is the app's only hard stop.
@@ -33,7 +30,7 @@ storage. No server, no network, no install. It never makes a network request.
 | NEXT FILE (the big number) | Tap to reconcile against the instrument any time |
 
 Dark mode is on the opening screen and in the `[=]` menu mid-session. Light is
-the default - that is what a glasshouse in full sun needs - and the choice is
+the default - and the choice is
 remembered separately from the session.
 
 Set the device's screen timeout to never before a session.

@@ -178,17 +178,22 @@ check('discard burns a number without asking',
   nodes.get('next-file-num').textContent === '90', nodes.get('next-file-num').textContent);
 check('discard opened no sheet', nodes.get('sheet').hasAttribute('hidden'));
 
-// Reconcile is still available on demand from the big number.
+// Reconcile is still available on demand from the big number. There is no
+// CHECK step: the verdict and the resync button follow the field as it types.
 nodes.get('next-file').click();
 check('tapping NEXT FILE opens reconcile',
   nodes.get('sheet-title').textContent === 'Reconcile', nodes.get('sheet-title').textContent);
 const recBody = nodes.get('sheet-body');
 const recInput = recBody.children.find(c => c.className === 'big-input');
-recInput.value = '93';
 const recActions = recBody.children[recBody.children.length - 1];
-recActions.children.find(c => c.textContent === 'CHECK').click();
+check('opens on the expected number as a match',
+  !!recActions.children.find(c => c.textContent === 'BACK TO WORK'),
+  recBody.children.map(c => c.textContent).join(' | ') +
+    ' :: ' + recActions.children.map(c => c.textContent).join(' | '));
+recInput.value = '93';
+recInput.dispatchEvent({ type: 'input', target: recInput });
 const resyncBtn = recActions.children.find(c => /LOG 3 DISCARDS/.test(c.textContent));
-check('mismatch offers to log the gap', !!resyncBtn,
+check('typing a different number offers to log the gap on the spot', !!resyncBtn,
   recActions.children.map(c => c.textContent).join(' | '));
 resyncBtn.click();
 check('resync moves the counter', nodes.get('next-file-num').textContent === '93',

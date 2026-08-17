@@ -23,13 +23,27 @@ const RealDate = Date;
 
 // Timestamps have to be deterministic or the golden event logs never match.
 // One fake second per instantiation, from a fixed epoch.
+//
+// The app stamps local time now, so the fake clock also fakes the timezone: a
+// fixed UTC+2 keeps the golden files byte-stable on any machine. The local
+// getters are the shifted date's UTC getters, so hours and offset always agree
+// no matter what timezone this machine thinks it is in.
+const FAKE_OFFSET_MIN = 120;   // getTimezoneOffset() is -120, i.e. UTC+2
 function makeFakeDate(epochMs) {
   let ticks = 0;
   function FakeDate() {
     const ms = epochMs + ticks * 1000;
     ticks += 1;
     const real = new RealDate(ms);
+    const local = new RealDate(ms + FAKE_OFFSET_MIN * 60000);
     this.toISOString = function () { return real.toISOString(); };
+    this.getFullYear = function () { return local.getUTCFullYear(); };
+    this.getMonth = function () { return local.getUTCMonth(); };
+    this.getDate = function () { return local.getUTCDate(); };
+    this.getHours = function () { return local.getUTCHours(); };
+    this.getMinutes = function () { return local.getUTCMinutes(); };
+    this.getSeconds = function () { return local.getUTCSeconds(); };
+    this.getTimezoneOffset = function () { return -FAKE_OFFSET_MIN; };
     this.getTime = function () { return ms; };
     this.valueOf = function () { return ms; };
   }

@@ -1,6 +1,6 @@
 timestamp,action,file_num,plan_row_index,note,row,range,BCN,glasshouse_bay,notes_from_agronomist
-2026-08-18T06:00:01.000Z,confirm,12,0,,1,1,41207,Bay 3,"said ""check the tips"", then left"
-2026-08-18T06:00:02.000Z,comment,,1,"gust of wind, ""maybe"" fine
+2026-08-18T08:00:01+02:00,confirm,12,0,,1,1,41207,Bay 3,"said ""check the tips"", then left"
+2026-08-18T08:00:02+02:00,comment,,1,"gust of wind, ""maybe"" fine
 re-scanned to be sure",2,1,41338,Bay 3,
-2026-08-18T06:00:03.000Z,confirm,13,1,,2,1,41338,Bay 3,
-2026-08-18T06:00:04.000Z,confirm,14,2,,3,2,V1,"Bay 4, north end",
+2026-08-18T08:00:03+02:00,confirm,13,1,,2,1,41338,Bay 3,
+2026-08-18T08:00:04+02:00,confirm,14,2,,3,2,V1,"Bay 4, north end",

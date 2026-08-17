@@ -126,12 +126,30 @@ section('Loading');
 
 test('rejects a file missing a required column', function () {
   const Core = loadCore();
-  const parsed = Core.parseCSV('row,BCN,Date,Prefix,Subfolder\n1,41207,,,\n');
+  const parsed = Core.parseCSV('row,BCN,Date,Prefix,Subfolder,comments\n1,41207,,,,,\n');
   assert.throws(function () {
     Core.createSession({ parsed: parsed });
   }, function (err) {
     return err.code === 'MISSING_COLUMNS' && err.missing.join() === 'FileNum';
   });
+});
+
+test('a plan without a comments column is refused', function () {
+  const Core = loadCore();
+  const parsed = Core.parseCSV('FileNum,Date,Prefix,Subfolder,row\n1,,,1,5\n');
+  assert.throws(function () {
+    Core.createSession({ parsed: parsed });
+  }, function (err) {
+    return err.code === 'MISSING_COLUMNS' && err.missing.join() === 'comments';
+  });
+});
+
+test('a header with no data rows is refused', function () {
+  const Core = loadCore();
+  const parsed = Core.parseCSV('FileNum,Date,Prefix,Subfolder,comments\n');
+  assert.throws(function () {
+    Core.createSession({ parsed: parsed });
+  }, function (err) { return err.code === 'EMPTY_PLAN'; });
 });
 
 test('starts the counter at config.startFileNum on a fresh plan', function () {
@@ -325,6 +343,17 @@ test('comment lands on the current row and is logged', function () {
   assert.equal(state.plan[0].comments, 'aphids on the flag leaf');
   assert.equal(state.cursor, 0);
   assert.equal(state.events[0].action, 'comment');
+});
+
+test('a meta save that changes nothing is not an action', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-a.csv', {
+    config: { startFileNum: 85 },
+    meta: { Date: '2026-08-18', Prefix: 'KLN300', Subfolder: 'day1' }
+  });
+  assert.equal(Core.setMeta(state, { Date: '2026-08-18', Prefix: 'KLN300', Subfolder: 'day1' }), null);
+  assert.equal(state.events.length, 0, 'no log row for a no-op save');
+  assert.equal(state.undoStack.length, 0, 'no undo entry for a no-op save');
 });
 
 test('a mid-session meta change lands on the current row only', function () {
@@ -619,7 +648,7 @@ test('empty identity values are omitted', function () {
 
 test('a plan with no row or range column still gets a lead field', function () {
   const Core = loadCore();
-  const parsed = Core.parseCSV('FileNum,Date,Prefix,Subfolder,BCN\n,,,,41207\n');
+  const parsed = Core.parseCSV('FileNum,Date,Prefix,Subfolder,comments,BCN\n,,,,,41207\n');
   const state = Core.createSession({ parsed: parsed });
   const id = Core.rowIdentity(state, 0);
   assert.deepEqual(id.lead.map(function (p) { return p.key; }), ['BCN']);
@@ -628,6 +657,14 @@ test('a plan with no row or range column still gets a lead field', function () {
 // ------------------------------------------------------------ event log ----
 
 section('Event log');
+
+test('event timestamps are local time with the offset', function () {
+  const Core = loadCore();
+  const state = session(Core, 'plan-a.csv', { config: { startFileNum: 85 } });
+  Core.confirm(state);
+  // The fake clock runs at a fixed +02:00 offset from a fixed epoch.
+  assert.equal(state.events[0].timestamp, '2026-08-18T08:00:01+02:00');
+});
 
 test('the log carries identity columns alongside each action', function () {
   const Core = loadCore();

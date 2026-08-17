@@ -44,9 +44,10 @@ row,range,rep,tech_rep,FileNum,WRNum,comments,Date,Day,Prefix,Subfolder,
 BCN,trial,treatment,plate,Q2_pos,order
 ```
 
-Required columns: `FileNum`, `Date`, `Prefix`, `Subfolder`. Everything else is optional.
-A missing required column is a hard load error; anything else missing just means less
-on the target card.
+Required columns: `FileNum`, `Date`, `Prefix`, `Subfolder`, `comments`. Everything
+else is optional. A missing required column is a hard load error; anything else missing
+just means less on the target card. A file with a header but no data rows is refused
+the same way - there is nothing to walk.
 
 Column roles:
 
@@ -84,6 +85,7 @@ Rules:
    always the bare integer, in the CSV and on screen - no padding anywhere.
 2. **Event log CSV** - audit trail, one row per action:
    `timestamp,action,file_num,plan_row_index,note`
+   (`timestamp` is the tablet's local time, ISO-8601 with the local offset.)
    (identity fields logged when present). `action` is one of
    `confirm | discard | white_ref | overwrite | comment | meta | reconcile`.
    This is the bit Excel never gave us: discarded file numbers become data instead of
@@ -131,12 +133,12 @@ separate "type a number" path outside the reconcile box.
 | **Overwrite** | +1 | next unfilled row | Only on filled rows (the Confirm button relabels). The row's old `FileNum` goes to the log as a discard note; the row is reassigned the displayed number. |
 | **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. One tap, no prompt - anything worth saying about it goes in the note. |
 | **White reference** | to the confirmed number +1, if `config.wrConsumesFileNumber`; else 0 | unchanged | The operator confirms which file number the WR actually is - WRs get re-taken too. Sets `currentWR`; the next Confirm stamps it into `WRNum`. Any numbers skipped on the way are logged as discards. This step **is** the reconcile (section 5). |
-| **Undo** | restore | restore | Reverses the last action exactly, removes its log entries, and pushes the whole lot onto `redoStack`. Leaves no log entry of its own. |
-| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly, log entries included. Any new action clears `redoStack` and disables Redo. |
+| **Undo** | restore | restore | Reverses the last action exactly, removes its log entries, and pushes the whole lot onto `redoStack`. Leaves no log entry of its own. 300ms debounce against double-taps. |
+| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly, log entries included. Any new action clears `redoStack` and disables Redo. 300ms debounce against double-taps, held apart from Undo's so undo-then-redo is never blocked. |
 | **Next/Prev row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
 | **Jump** | unchanged | to chosen row | Opens the full-screen row list (section 6). |
 | **Comment** | unchanged | unchanged | Free text on the current row. Always quoted in output, newlines preserved. |
-| **Edit meta** | unchanged | unchanged | Set or change `Date`, `Prefix`, `Subfolder`. Written on the current row only; other rows stay blank for downstream imputation. |
+| **Edit meta** | unchanged | unchanged | Set or change `Date`, `Prefix`, `Subfolder`. Written on the current row only; other rows stay blank for downstream imputation. A save that changes nothing is not an action - no undo entry, no log row. |
 
 No "confirm and stay" variant for the tech_rep pairs: the walk order in the plan
 matches the physical sampling pattern, so plain sequential confirms are correct, and
@@ -171,12 +173,23 @@ Reconcile is prompted:
 - **Immediately after loading a partly-filled CSV** without session JSON (section 3).
 - **On demand**, by tapping the big `NEXT FILE` display.
 
+There is no separate CHECK step: the verdict and the action button follow the field as
+it is typed, so a different number turns the primary button into the resync action on
+the spot.
+
 Outcomes:
 
-- Match: green tick, log a `reconcile` event, carry on. Two seconds.
-- Mismatch: show the gap explicitly ("instrument says 189, app expects 186 - 3 files
-  unaccounted for") and offer: log the gap as N anonymous discards and resynchronise
-  `nextFileNum` to the entered value, or open the event log to correct it.
+- Match: green tick, a BACK TO WORK button that logs a `reconcile` event and carries
+  on. Two seconds.
+- Mismatch: the gap shows explicitly ("instrument says 189, app expects 186 - 3 files
+  unaccounted for") and the primary button is already the split action: log the gap as
+  N anonymous discards and resynchronise `nextFileNum` to the entered value. A second
+  button records the mismatch without touching the counter.
+
+Resync reuses numbers below the current counter, and that is expected: a row that
+changes `Prefix` or `Subfolder` starts a fresh numbering scope downstream (files
+restart at 0), so the same `FileNum` legitimately recurs under different scopes, and
+the validate duplicate warning (section 9) can be benign across them.
 
 An error caught at the next white reference costs a few scans of uncertainty. The same
 error caught in the QC pipeline three weeks later costs the day.
