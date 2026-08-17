@@ -644,6 +644,41 @@ test('a session from another version is refused', function () {
     function (e) { return e.code === 'BAD_SESSION'; });
 });
 
+// ------------------------------------------------------------ UI wiring ----
+
+// The UI script cannot be unit-tested without a DOM, but the failure that
+// actually bites - a getElementById id that no longer exists in the markup -
+// is catchable statically, and silently breaks the app when it happens.
+
+section('UI wiring');
+
+test('every element the UI reaches for exists in the markup', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'svc-fieldnotes.html'), 'utf8');
+  const ui = html.match(/<script id="ui">([\s\S]*?)<\/script>/);
+  assert.ok(ui, 'no <script id="ui"> block');
+
+  const ids = new Set();
+  const idRe = /\$\('([^']+)'\)/g;
+  let m;
+  while ((m = idRe.exec(ui[1])) !== null) { ids.add(m[1]); }
+  assert.ok(ids.size > 10, 'suspiciously few element lookups: ' + ids.size);
+
+  const declared = new Set();
+  const declRe = /\sid="([^"]+)"/g;
+  while ((m = declRe.exec(html)) !== null) { declared.add(m[1]); }
+
+  const missing = [...ids].filter(function (id) { return !declared.has(id); });
+  assert.deepEqual(missing, [], 'UI looks up ids that are not in the markup');
+});
+
+test('the shipped file is self-contained', function () {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'svc-fieldnotes.html'), 'utf8');
+  const external = html.match(/(src|href)\s*=\s*"(?!#)[^"]*"/g) || [];
+  assert.deepEqual(external, [], 'external reference in a single-file app');
+  assert.equal(/\bfetch\s*\(/.test(html), false, 'no network requests, ever');
+  assert.equal(/@import|url\(\s*http/.test(html), false, 'external CSS reference');
+});
+
 // --------------------------------------------------------------- golden ----
 
 section('Golden files');
