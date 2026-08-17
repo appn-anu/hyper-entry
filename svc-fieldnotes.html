@@ -1320,7 +1320,8 @@ textarea.note {
     if (nonMonotonic.length) {
       warnings.push({
         code: 'non_monotonic',
-        message: 'FileNum goes backwards at ' + nonMonotonic.length + ' row(s)',
+        message: 'FileNum goes backwards at ' + nonMonotonic.length +
+          (nonMonotonic.length === 1 ? ' row' : ' rows'),
         rows: nonMonotonic
       });
     }
@@ -1328,7 +1329,7 @@ textarea.note {
     if (blanks.length) {
       warnings.push({
         code: 'blank_file_num',
-        message: blanks.length + ' row(s) have no FileNum',
+        message: blanks.length + (blanks.length === 1 ? ' row has' : ' rows have') + ' no FileNum',
         rows: blanks
       });
     }
@@ -1651,10 +1652,10 @@ textarea.note {
         if (missing.length) {
           // The one hard stop in the app: without these there is nothing to fill.
           throw new Error('Missing required column(s): ' + missing.join(', ') +
-            '\nThis plan cannot be used until they are present.');
+            '\nAdd them and load the file again.');
         }
         if (!parsed.rows.length) {
-          throw new Error('This plan has no data rows - nothing to fill.');
+          throw new Error('The plan has no data rows - nothing to fill.');
         }
         loaded = { fileName: file.name, parsed: parsed };
         setStartError('');
@@ -2227,7 +2228,7 @@ textarea.note {
   function openMeta() {
     openSheet('Date, Prefix, Subfolder', function (body) {
       body.appendChild(el('p', 'sheet-note',
-        'Written on the current row only. Everything below it inherits the value downstream.'));
+        'Written on the current row only - rows below inherit it.'));
 
       var inputs = {};
       ['Date', 'Prefix', 'Subfolder'].forEach(function (col) {
