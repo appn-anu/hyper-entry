@@ -280,6 +280,69 @@ textarea.note {
   padding: 10px;
 }
 
+/* ------------------------------------------------------------- jump list */
+
+.jump-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  min-height: 56px;
+}
+.jump-row.filled { background: var(--panel); }
+.jump-row.current { outline: 3px solid var(--go); outline-offset: -3px; }
+/* Fixed to the left edge, always in the same place under the thumb. */
+.jump-row button {
+  flex: 0 0 64px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 56px;
+}
+.jump-info { flex: 1 1 auto; padding: 6px 8px; min-width: 0; }
+.jump-lead { font-size: 15px; font-weight: 700; }
+.jump-fields {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jump-num {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.jump-num.empty { color: var(--muted); font-weight: 400; }
+
+/* ------------------------------------------------------------- warnings */
+
+.warn-list { margin: 0 0 12px; padding: 0; list-style: none; }
+.warn-list li {
+  background: #fff6e5;
+  border: 1px solid var(--overwrite);
+  color: var(--overwrite);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.warn-ok {
+  background: #e6f4ea;
+  border: 1px solid var(--go);
+  color: var(--go);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
 /* ----------------------------------------------------------------- sheet */
 
 #sheet {
@@ -406,6 +469,11 @@ textarea.note {
     </div>
 
     <button id="btn-start" class="primary" disabled>START SESSION</button>
+
+    <div class="field" style="margin-top:18px">
+      <label for="session-input">Or pick up a session file from another device</label>
+      <input type="file" id="session-input" accept=".json,application/json">
+    </div>
   </section>
 
   <section id="screen-main" class="screen" hidden>
@@ -1888,13 +1956,130 @@ textarea.note {
 
   function openExport() {
     openSheet('Export', function (body) {
-      var note = el('p', 'sheet-note',
-        'Download if the tablet allows it. Otherwise select the text and share it out.');
-      body.appendChild(note);
+      // Warnings sit above the downloads, and stop nothing.
+      appendWarnings(body);
+      body.appendChild(el('p', 'sheet-note',
+        'Download if the tablet allows it. Otherwise select the text and share it out.'));
       exportBlock(body, 'Plan CSV', outName('filled', 'csv'),
         Core.exportPlanCSV(state), 'text/csv');
       exportBlock(body, 'Event log CSV', outName('events', 'csv'),
         Core.exportEventsCSV(state), 'text/csv');
+      exportBlock(body, 'Session file (to resume elsewhere)', outName('session', 'json'),
+        Core.exportSessionJSON(state), 'application/json');
+    });
+  }
+
+  // ------------------------------------------------------------- jump list
+
+  // The whole plan, one line per row, with the Jump button pinned to the left
+  // edge so the thumb always knows where it is.
+  function openJump() {
+    openSheet('Jump to a row', function (body) {
+      var current = null;
+      for (var i = 0; i < state.plan.length; i++) {
+        body.appendChild(jumpRow(i, function (node, index) {
+          if (index === state.cursor) { current = node; }
+        }));
+      }
+      // Land on where the operator actually is, not at the top of the plan.
+      if (current) {
+        setTimeout(function () { body.scrollTop = Math.max(0, current.offsetTop - 90); }, 0);
+      }
+    }, true);
+  }
+
+  function jumpRow(index, notice) {
+    var row = state.plan[index];
+    var filled = !Core.isBlank(row.FileNum);
+    var node = el('div', 'jump-row' + (filled ? ' filled' : '') +
+      (index === state.cursor ? ' current' : ''));
+
+    var go = el('button', null, 'GO');
+    on(go, 'click', function () {
+      Core.jumpTo(state, index);
+      closeSheet();
+      render();
+      save();
+    });
+    node.appendChild(go);
+
+    var id = Core.rowIdentity(state, index);
+    var info = el('div', 'jump-info');
+    var lead = [];
+    for (var i = 0; i < id.lead.length; i++) { lead.push(id.lead[i].key + ' ' + id.lead[i].value); }
+    info.appendChild(el('span', 'jump-lead', lead.join('  ')));
+    info.appendChild(el('span', 'jump-fields', identityLine(id.fields, 4)));
+    node.appendChild(info);
+
+    node.appendChild(el('div', 'jump-num' + (filled ? '' : ' empty'),
+      filled ? String(row.FileNum) : '-'));
+
+    notice(node, index);
+    return node;
+  }
+
+  // ------------------------------------------------------------- edit meta
+
+  function openMeta() {
+    openSheet('Date, Prefix, Subfolder', function (body) {
+      body.appendChild(el('p', 'sheet-note',
+        'Written on the current row only. Everything below it inherits the value downstream.'));
+
+      var inputs = {};
+      ['Date', 'Prefix', 'Subfolder'].forEach(function (col) {
+        var field = el('div', 'field');
+        var label = el('label', null, col);
+        field.appendChild(label);
+        var input = el('input');
+        input.setAttribute('type', col === 'Date' ? 'date' : 'text');
+        input.value = state.meta[col] || '';
+        field.appendChild(input);
+        inputs[col] = input;
+        body.appendChild(field);
+      });
+
+      var go = el('button', 'primary', 'SAVE');
+      on(go, 'click', function () {
+        Core.setMeta(state, {
+          Date: inputs.Date.value,
+          Prefix: inputs.Prefix.value,
+          Subfolder: inputs.Subfolder.value
+        });
+        closeSheet();
+        afterAction();
+      });
+      body.appendChild(go);
+    });
+  }
+
+  // ------------------------------------------------------------ validation
+
+  // Warn, do not block. The operator is in a glasshouse and knows things the
+  // app does not.
+  function appendWarnings(body) {
+    var warnings = Core.validate(state);
+    if (!warnings.length) {
+      body.appendChild(el('div', 'warn-ok', '✓ Nothing looks wrong with the plan.'));
+      return;
+    }
+    var list = el('ul', 'warn-list');
+    warnings.forEach(function (warning) {
+      var item = el('li', null, warning.message);
+      if (warning.rows && warning.rows.length && warning.rows.length <= 12) {
+        item.appendChild(el('div', null, 'rows: ' + warning.rows.map(function (r) {
+          return r + 1;
+        }).join(', ')));
+      }
+      list.appendChild(item);
+    });
+    body.appendChild(list);
+  }
+
+  function openCheck() {
+    openSheet('Check plan', function (body) {
+      appendWarnings(body);
+      body.appendChild(el('p', 'sheet-note',
+        'Warnings never block anything - export works regardless.'));
     });
   }
 
@@ -1902,8 +2087,48 @@ textarea.note {
 
   on($('btn-menu'), 'click', function () {
     openSheet('Menu', function (body) {
+      sheetButton(body, 'Jump to a row', function () { closeSheet(); openJump(); });
+      sheetButton(body, 'Date, Prefix, Subfolder', function () { closeSheet(); openMeta(); });
+      sheetButton(body, 'Check plan', function () { closeSheet(); openCheck(); });
       sheetButton(body, 'Export', function () { closeSheet(); openExport(); });
+      sheetButton(body, 'End session', function () {
+        closeSheet();
+        openSheet('End session', function (inner) {
+          inner.appendChild(el('p', 'sheet-note',
+            'Export first - ending the session clears the autosave on this tablet.'));
+          sheetButton(inner, 'EXPORT', function () { closeSheet(); openExport(); });
+          var end = el('button', 'sheet-btn', 'END SESSION AND CLEAR');
+          on(end, 'click', function () {
+            clearSaved();
+            state = null;
+            closeSheet();
+            window.location.reload();
+          });
+          inner.appendChild(end);
+        });
+      });
     });
+  });
+
+  // --------------------------------------------- session file from elsewhere
+
+  on($('session-input'), 'change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) { return; }
+    var reader = new FileReader();
+    reader.onerror = function () { setStartError('Could not read that file.'); };
+    reader.onload = function () {
+      try {
+        state = Core.importSessionJSON(String(reader.result));
+      } catch (err) {
+        setStartError('That is not a session file this version can read.\n' + err.message);
+        return;
+      }
+      setStartError('');
+      show($('resume-box'), false);
+      startMain();
+    };
+    reader.readAsText(file);
   });
 
   // Best-effort only: mobile browsers fire this unreliably, which is why the
