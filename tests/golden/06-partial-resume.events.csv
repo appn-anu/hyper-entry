@@ -1,0 +1,7 @@
+timestamp,action,file_num,plan_row_index,note,row,range,rep,tech_rep,Day,BCN,trial,plate,Q2_pos,order
+2026-08-18T06:00:01.000Z,discard,104,3,"unaccounted at reconcile",7,4,2,1,1,47512,KLN-482,Plate 1,G3,4
+2026-08-18T06:00:02.000Z,discard,105,3,"unaccounted at reconcile",7,4,2,1,1,47512,KLN-482,Plate 1,G3,4
+2026-08-18T06:00:03.000Z,discard,106,3,"unaccounted at reconcile",7,4,2,1,1,47512,KLN-482,Plate 1,G3,4
+2026-08-18T06:00:04.000Z,reconcile,107,3,"resync 104 -> 107 (3 unaccounted)",7,4,2,1,1,47512,KLN-482,Plate 1,G3,4
+2026-08-18T06:00:05.000Z,confirm,107,3,,7,4,2,1,1,47512,KLN-482,Plate 1,G3,4
+2026-08-18T06:00:06.000Z,confirm,108,4,,11,1,1,1,1,39604,KLN-482,Plate 2,C3,1

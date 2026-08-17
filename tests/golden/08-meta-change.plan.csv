@@ -1,0 +1,6 @@
+row,range,rep,tech_rep,FileNum,WRNum,comments,Date,Day,Prefix,Subfolder,BCN,trial,treatment,ecotype
+1,1,1,,10,,,2026-08-18,1,TLN30,block1,44518,TLN-53190,Treatment_1,winter
+2,1,1,,11,,,,1,,,44518,TLN-53190,Treatment_1,winter
+3,1,2,,12,,,,1,,block2,42630,TLN-53190,Treatment_1,winter
+1,2,1,,13,,,,1,,,V1,TLN-53190,Treatment_2,spring
+2,2,1,,14,,,,1,,,42630,TLN-53190,Treatment_2,spring

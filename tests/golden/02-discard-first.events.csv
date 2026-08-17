@@ -1,0 +1,4 @@
+timestamp,action,file_num,plan_row_index,note,row,range,rep,tech_rep,Day,BCN,trial,treatment,plate,Q2_pos,order
+2026-08-18T06:00:01.000Z,discard,0,0,"test scan before starting",1,1,1,1,1,41207,KLN-482,Spring Type,Plate 1,E1,1
+2026-08-18T06:00:02.000Z,confirm,1,0,,1,1,1,1,1,41207,KLN-482,Spring Type,Plate 1,E1,1
+2026-08-18T06:00:03.000Z,confirm,2,1,,1,2,1,1,1,41338,KLN-482,Spring Type,Plate 1,F1,2

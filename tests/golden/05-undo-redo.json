@@ -1,0 +1,17 @@
+{
+  "description": "Undo twice, redo once, then a new action - which clears what was left on the redo stack.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["undo"],
+    ["undo"],
+    ["redo"],
+    ["discard", "wrong plant"],
+    ["redo"],
+    ["confirm"]
+  ]
+}

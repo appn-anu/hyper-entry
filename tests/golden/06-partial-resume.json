@@ -1,0 +1,11 @@
+{
+  "description": "Resume a partly-filled plan: the counter is a guess, reconcile finds three unaccounted files.",
+  "fixture": "plan-partial.csv",
+  "config": {},
+  "meta": {},
+  "actions": [
+    ["reconcile", 107, "accept"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

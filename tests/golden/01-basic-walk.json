@@ -1,0 +1,13 @@
+{
+  "description": "The ordinary case: set meta at session start, walk four rows, note one of them.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["confirm"],
+    ["confirm"],
+    ["comment", "leaf curled, held it flat"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

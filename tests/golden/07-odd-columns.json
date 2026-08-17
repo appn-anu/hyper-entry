@@ -1,0 +1,12 @@
+{
+  "description": "Columns the app has never seen, plus a comment full of commas, quotes and newlines.",
+  "fixture": "plan-odd.csv",
+  "config": { "startFileNum": 12 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["confirm"],
+    ["comment", "gust of wind, \"maybe\" fine\nre-scanned to be sure"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Discard as the very first action of a session - nothing captured yet, but the number is gone.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 0 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["discard", "test scan before starting"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

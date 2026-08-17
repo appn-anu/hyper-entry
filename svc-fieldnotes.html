@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>SVC Field Notes</title>
+</head>
+<body>
+
+<noscript>This app needs JavaScript.</noscript>
+
+<!--
+  Core: CSV parse/serialise + the action state machine.
+
+  This script must stay DOM-free. tests/run.js pulls it out of this file by its
+  id and evaluates it in Node, so the tests exercise the exact bytes that ship.
+  Nothing in here may touch window, document, localStorage or Date-formatting
+  locales; the UI script below owns all of that.
+-->
+<script id="core">
+(function (root, factory) {
+  var api = factory();
+  if (typeof module === 'object' && module.exports) { module.exports = api; }
+  if (root) { root.SVCCore = api; }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  // Columns the app writes on every captured row.
+  var CAPTURE_COLS = ['FileNum', 'comments'];
+  // Columns written only where the value changes; downstream forward-fills them.
+  var TRACKED_COLS = ['WRNum', 'Date', 'Prefix', 'Subfolder'];
+  // Without these there is nothing to fill, or nothing to file it under.
+  var REQUIRED_COLS = ['FileNum', 'Date', 'Prefix', 'Subfolder'];
+
+  var DEFAULT_CONFIG = {
+    wrConsumesFileNumber: true,
+    startFileNum: 0,
+    undoDepth: 20
+  };
+
+  var SESSION_VERSION = 1;
+
+  // ---------------------------------------------------------------- CSV ----
+
+  // Real CSV: quoted fields, embedded commas, embedded newlines, "" escapes.
+  // Returns { header, rows, eol, trailingNewline }. Rows are plain objects
+  // keyed by header name; cells past the end of the header are kept verbatim
+  // on __extra so a hand-edited file round-trips without losing anything.
+  function parseCSV(text) {
+    if (typeof text !== 'string') { throw new Error('parseCSV needs a string'); }
+    if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); }
+
+    var eol = text.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+    var trailingNewline = /[\r\n]$/.test(text);
+
+    var records = [];
+    var field = '';
+    var record = [];
+    var inQuotes = false;
+    var started = false; // distinguishes a real empty field from "no field yet"
+    var i = 0;
+    var n = text.length;
+
+    function endField() { record.push(field); field = ''; started = false; }
+    function endRecord() { endField(); records.push(record); record = []; }
+
+    while (i < n) {
+      var c = text.charAt(i);
+      if (inQuotes) {
+        if (c === '"') {
+          if (text.charAt(i + 1) === '"') { field += '"'; i += 2; continue; }
+          inQuotes = false; i += 1; continue;
+        }
+        field += c; i += 1; continue;
+      }
+      if (c === '"') { inQuotes = true; started = true; i += 1; continue; }
+      if (c === ',') { endField(); started = true; i += 1; continue; }
+      if (c === '\r' && text.charAt(i + 1) === '\n') { endRecord(); i += 2; continue; }
+      if (c === '\n' || c === '\r') { endRecord(); i += 1; continue; }
+      field += c; started = true; i += 1;
+    }
+    if (started || field !== '' || record.length) { endRecord(); }
+
+    // Drop blank lines (a lone empty field), but never the header.
+    records = records.filter(function (r, idx) {
+      return idx === 0 || !(r.length === 1 && r[0] === '');
+    });
+
+    if (!records.length) { return { header: [], rows: [], eol: eol, trailingNewline: trailingNewline }; }
+
+    var header = records[0].map(function (h) { return h.trim(); });
+    var rows = records.slice(1).map(function (cells) {
+      var row = {};
+      for (var j = 0; j < header.length; j++) {
+        row[header[j]] = j < cells.length ? cells[j] : '';
+      }
+      if (cells.length > header.length) { row.__extra = cells.slice(header.length); }
+      return row;
+    });
+
+    return { header: header, rows: rows, eol: eol, trailingNewline: trailingNewline };
+  }
+
+  function quoteField(value, force) {
+    var s = value == null ? '' : String(value);
+    // An empty cell is never quoted, even in a force-quoted column: writing ""
+    // into every uncaptured comment would change bytes on rows the operator
+    // never touched, and an untouched plan has to come back out as it went in.
+    if (s === '') { return ''; }
+    var needs = force || /[",\r\n]/.test(s) || /^\s/.test(s) || /\s$/.test(s);
+    if (!needs) { return s; }
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
+  // opts: { eol, trailingNewline, alwaysQuote: [colName, ...] }
+  function serializeCSV(header, rows, opts) {
+    opts = opts || {};
+    var eol = opts.eol || '\r\n';
+    var alwaysQuote = opts.alwaysQuote || [];
+    var lines = [header.map(function (h) { return quoteField(h, false); }).join(',')];
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var cells = [];
+      for (var j = 0; j < header.length; j++) {
+        var col = header[j];
+        cells.push(quoteField(row[col], alwaysQuote.indexOf(col) !== -1));
+      }
+      if (row.__extra) {
+        for (var k = 0; k < row.__extra.length; k++) { cells.push(quoteField(row.__extra[k], false)); }
+      }
+      lines.push(cells.join(','));
+    }
+
+    var out = lines.join(eol);
+    if (opts.trailingNewline !== false) { out += eol; }
+    return out;
+  }
+
+  // ------------------------------------------------------------ helpers ----
+
+  function isBlank(v) { return v == null || String(v).trim() === ''; }
+
+  function identityCols(header) {
+    return header.filter(function (col) {
+      return CAPTURE_COLS.indexOf(col) === -1 && TRACKED_COLS.indexOf(col) === -1;
+    });
+  }
+
+  function missingRequired(header) {
+    return REQUIRED_COLS.filter(function (col) { return header.indexOf(col) === -1; });
+  }
+
+  function toFileNum(v) {
+    if (isBlank(v)) { return null; }
+    var s = String(v).trim();
+    if (!/^-?\d+$/.test(s)) { return null; }
+    return parseInt(s, 10);
+  }
+
+  // The value downstream forward-fill would impute at rowIndex: the nearest
+  // non-empty value strictly above it. Scanning beats caching because the
+  // cursor moves backwards (jump, overwrite) and undo rewrites history.
+  function effectiveValue(state, col, rowIndex) {
+    for (var i = rowIndex - 1; i >= 0; i--) {
+      var v = state.plan[i][col];
+      if (!isBlank(v)) { return String(v); }
+    }
+    return '';
+  }
+
+  function nextUnfilled(state, from) {
+    for (var i = from; i < state.plan.length; i++) {
+      if (isBlank(state.plan[i].FileNum)) { return i; }
+    }
+    return -1;
+  }
+
+  function firstUnfilled(state) {
+    var i = nextUnfilled(state, 0);
+    return i === -1 ? Math.max(0, state.plan.length - 1) : i;
+  }
+
+  function highestFileNum(rows) {
+    var max = null;
+    for (var i = 0; i < rows.length; i++) {
+      var v = toFileNum(rows[i].FileNum);
+      if (v !== null && (max === null || v > max)) { max = v; }
+    }
+    return max;
+  }
+
+  function countFilled(rows) {
+    var n = 0;
+    for (var i = 0; i < rows.length; i++) { if (!isBlank(rows[i].FileNum)) { n++; } }
+    return n;
+  }
+
+  // ------------------------------------------------------------ session ----
+
+  // opts: { fileName, parsed, config, meta, now }
+  function createSession(opts) {
+    var parsed = opts.parsed;
+    var missing = missingRequired(parsed.header);
+    if (missing.length) {
+      var err = new Error('Missing required column(s): ' + missing.join(', '));
+      err.code = 'MISSING_COLUMNS';
+      err.missing = missing;
+      throw err;
+    }
+
+    var config = Object.assign({}, DEFAULT_CONFIG, opts.config || {});
+    var plan = parsed.rows;
+    var maxFilled = highestFileNum(plan);
+    var partlyFilled = countFilled(plan) > 0;
+
+    var state = {
+      version: SESSION_VERSION,
+      fileName: opts.fileName || 'plan.csv',
+      header: parsed.header.slice(),
+      plan: plan,
+      eol: parsed.eol || '\r\n',
+      trailingNewline: parsed.trailingNewline !== false,
+      cursor: 0,
+      nextFileNum: maxFilled === null ? config.startFileNum : maxFilled + 1,
+      currentWR: null,
+      meta: Object.assign({ Date: '', Prefix: '', Subfolder: '' }, opts.meta || {}),
+      config: config,
+      undoStack: [],
+      redoStack: [],
+      events: [],
+      eventSeq: 0,
+      // A partly-filled CSV hides trailing discards and WRs from the earlier
+      // session, so the counter is a guess until the operator checks it.
+      needsReconcile: partlyFilled,
+      startedAt: opts.now || nowISO()
+    };
+
+    state.cursor = firstUnfilled(state);
+
+    // Pick up the tracked values already standing above the cursor, so the
+    // first confirm does not rewrite what the file already says.
+    for (var t = 0; t < TRACKED_COLS.length; t++) {
+      var col = TRACKED_COLS[t];
+      var standing = effectiveValue(state, col, state.cursor);
+      if (col === 'WRNum') {
+        var wr = toFileNum(standing);
+        if (wr !== null) { state.currentWR = wr; }
+      } else if (standing !== '' && isBlank(state.meta[col])) {
+        state.meta[col] = standing;
+      }
+    }
+
+    return state;
+  }
+
+  function nowISO() { return new Date().toISOString(); }
+
+  // ------------------------------------------------------------- events ----
+
+  function makeEvent(state, action, fields) {
+    state.eventSeq += 1;
+    var ev = {
+      id: state.eventSeq,
+      timestamp: fields.timestamp || nowISO(),
+      action: action,
+      file_num: fields.file_num == null ? '' : String(fields.file_num),
+      plan_row_index: fields.plan_row_index == null ? '' : String(fields.plan_row_index),
+      note: fields.note || '',
+      identity: {}
+    };
+    var rowIndex = fields.plan_row_index;
+    if (typeof rowIndex === 'number' && state.plan[rowIndex]) {
+      var cols = identityCols(state.header);
+      for (var i = 0; i < cols.length; i++) {
+        var v = state.plan[rowIndex][cols[i]];
+        if (!isBlank(v)) { ev.identity[cols[i]] = String(v); }
+      }
+    }
+    return ev;
+  }
+
+  // ------------------------------------------------------ action plumbing ----
+
+  // Every mutating action runs inside a transaction so undo/redo get an exact,
+  // compact patch: scalars before/after plus only the cells actually touched.
+  function transact(state, type, body) {
+    var tx = {
+      type: type,
+      before: snapshotScalars(state),
+      cellsBefore: {},
+      cellsAfter: {},
+      events: []
+    };
+
+    var ctx = {
+      setCell: function (rowIndex, col, value) {
+        var row = state.plan[rowIndex];
+        if (!row) { return; }
+        var key = rowIndex + '|' + col;
+        if (!(key in tx.cellsBefore)) { tx.cellsBefore[key] = row[col] == null ? '' : String(row[col]); }
+        row[col] = value;
+        tx.cellsAfter[key] = value;
+      },
+      log: function (action, fields) {
+        var ev = makeEvent(state, action, fields || {});
+        state.events.push(ev);
+        tx.events.push(ev);
+        return ev;
+      }
+    };
+
+    var result = body(ctx);
+    tx.after = snapshotScalars(state);
+
+    state.undoStack.push(tx);
+    while (state.undoStack.length > state.config.undoDepth) { state.undoStack.shift(); }
+    state.redoStack = [];
+
+    return { tx: tx, result: result };
+  }
+
+  function snapshotScalars(state) {
+    return {
+      cursor: state.cursor,
+      nextFileNum: state.nextFileNum,
+      currentWR: state.currentWR,
+      meta: Object.assign({}, state.meta),
+      needsReconcile: state.needsReconcile
+    };
+  }
+
+  function restoreScalars(state, snap) {
+    state.cursor = snap.cursor;
+    state.nextFileNum = snap.nextFileNum;
+    state.currentWR = snap.currentWR;
+    state.meta = Object.assign({}, snap.meta);
+    state.needsReconcile = snap.needsReconcile;
+  }
+
+  function applyCells(state, cells) {
+    for (var key in cells) {
+      if (!Object.prototype.hasOwnProperty.call(cells, key)) { continue; }
+      var split = key.indexOf('|');
+      var rowIndex = parseInt(key.slice(0, split), 10);
+      var col = key.slice(split + 1);
+      if (state.plan[rowIndex]) { state.plan[rowIndex][col] = cells[key]; }
+    }
+  }
+
+  // What forward-fill currently imputes for the rows below this one: the row's
+  // own value if it has one, otherwise the nearest value above it.
+  function standingValue(state, col, rowIndex) {
+    var own = state.plan[rowIndex][col];
+    if (!isBlank(own)) { return String(own); }
+    return effectiveValue(state, col, rowIndex);
+  }
+
+  // Writing a tracked value onto a row that has already-captured rows beneath
+  // it changes what forward-fill imputes for them. Close the region: put the
+  // old value back on the very next row, so those rows keep the value they
+  // were actually captured under.
+  //
+  // This only fires on back-fill - jumping to a skipped row, or overwriting.
+  // Walking forward there is nothing captured below to protect, so the output
+  // stays as sparse as the spec asks for.
+  function preserveBelow(state, ctx, rowIndex, col, oldValue) {
+    if (oldValue === '') { return; }
+    var next = rowIndex + 1;
+    if (next >= state.plan.length) { return; }
+    if (!isBlank(state.plan[next][col])) { return; } // region already closed
+    for (var i = next; i < state.plan.length; i++) {
+      if (!isBlank(state.plan[i][col])) { return; }  // the next explicit value closes it
+      if (!isBlank(state.plan[i].FileNum)) {         // a captured row relies on oldValue
+        ctx.setCell(next, col, oldValue);
+        return;
+      }
+    }
+  }
+
+  // Stamp the change-tracked columns onto a row, but only where the value
+  // differs from what forward-fill would already put there.
+  function stampTracked(state, ctx, rowIndex) {
+    for (var i = 0; i < TRACKED_COLS.length; i++) {
+      var col = TRACKED_COLS[i];
+      if (state.header.indexOf(col) === -1) { continue; }
+      var desired;
+      if (col === 'WRNum') {
+        desired = state.currentWR == null ? '' : String(state.currentWR);
+      } else {
+        desired = isBlank(state.meta[col]) ? '' : String(state.meta[col]);
+      }
+      if (desired === '') { continue; }
+      var standing = standingValue(state, col, rowIndex);
+      if (desired === standing) { continue; }
+      ctx.setCell(rowIndex, col, desired);
+      preserveBelow(state, ctx, rowIndex, col, standing);
+    }
+  }
+
+  function advanceCursor(state) {
+    var next = nextUnfilled(state, state.cursor + 1);
+    if (next !== -1) { state.cursor = next; }
+    else { state.cursor = Math.max(0, state.plan.length - 1); }
+  }
+
+  // ------------------------------------------------------------ actions ----
+
+  function isFilled(state, rowIndex) {
+    var row = state.plan[rowIndex];
+    return !!row && !isBlank(row.FileNum);
+  }
+
+  // Assign the displayed nextFileNum to the current row. Unfilled rows only -
+  // the UI relabels the button to OVERWRITE on filled ones.
+  function confirm(state) {
+    if (!state.plan.length) { return null; }
+    if (isFilled(state, state.cursor)) {
+      var err = new Error('Row already has a FileNum - use overwrite');
+      err.code = 'ROW_FILLED';
+      throw err;
+    }
+    return transact(state, 'confirm', function (ctx) {
+      var rowIndex = state.cursor;
+      var num = state.nextFileNum;
+      ctx.setCell(rowIndex, 'FileNum', String(num));
+      stampTracked(state, ctx, rowIndex);
+      state.nextFileNum = num + 1;
+      ctx.log('confirm', { file_num: num, plan_row_index: rowIndex });
+      advanceCursor(state);
+      return num;
+    });
+  }
+
+  // Reassign a row that already holds a number. The number it held is logged
+  // as discarded, because on the instrument that file still exists.
+  function overwrite(state) {
+    if (!state.plan.length) { return null; }
+    if (!isFilled(state, state.cursor)) {
+      var err = new Error('Row is empty - use confirm');
+      err.code = 'ROW_EMPTY';
+      throw err;
+    }
+    return transact(state, 'overwrite', function (ctx) {
+      var rowIndex = state.cursor;
+      var old = String(state.plan[rowIndex].FileNum);
+      var num = state.nextFileNum;
+      ctx.setCell(rowIndex, 'FileNum', String(num));
+      stampTracked(state, ctx, rowIndex);
+      state.nextFileNum = num + 1;
+      ctx.log('overwrite', {
+        file_num: num,
+        plan_row_index: rowIndex,
+        note: 'discarded ' + old
+      });
+      advanceCursor(state);
+      return num;
+    });
+  }
+
+  // The instrument wrote a file but it is junk. Burn the number, stay put.
+  function discard(state, reason) {
+    return transact(state, 'discard', function (ctx) {
+      var num = state.nextFileNum;
+      state.nextFileNum = num + 1;
+      ctx.log('discard', {
+        file_num: num,
+        plan_row_index: state.cursor,
+        note: reason || ''
+      });
+      return num;
+    });
+  }
+
+  // White reference. Consumes a file number in the current SVC workflow;
+  // config.wrConsumesFileNumber turns that off for SVCScan.
+  function whiteRef(state) {
+    return transact(state, 'white_ref', function (ctx) {
+      var num = null;
+      if (state.config.wrConsumesFileNumber) {
+        num = state.nextFileNum;
+        state.currentWR = num;
+        state.nextFileNum = num + 1;
+      }
+      ctx.log('white_ref', {
+        file_num: num,
+        plan_row_index: state.cursor,
+        note: state.config.wrConsumesFileNumber ? '' : 'no file written'
+      });
+      return num;
+    });
+  }
+
+  function setComment(state, text) {
+    return transact(state, 'comment', function (ctx) {
+      var rowIndex = state.cursor;
+      ctx.setCell(rowIndex, 'comments', text == null ? '' : String(text));
+      ctx.log('comment', {
+        plan_row_index: rowIndex,
+        file_num: toFileNum(state.plan[rowIndex].FileNum),
+        note: text == null ? '' : String(text)
+      });
+      return text;
+    });
+  }
+
+  // Date / Prefix / Subfolder. Lands on the current row only; every other row
+  // stays blank for downstream forward-fill.
+  function setMeta(state, meta) {
+    return transact(state, 'meta', function (ctx) {
+      var changed = [];
+      for (var i = 0; i < TRACKED_COLS.length; i++) {
+        var col = TRACKED_COLS[i];
+        if (col === 'WRNum') { continue; }
+        if (!Object.prototype.hasOwnProperty.call(meta, col)) { continue; }
+        var value = meta[col] == null ? '' : String(meta[col]);
+        if (value === state.meta[col]) { continue; }
+        state.meta[col] = value;
+        changed.push(col + '=' + value);
+      }
+      if (changed.length) { stampTracked(state, ctx, state.cursor); }
+      ctx.log('meta', {
+        plan_row_index: state.cursor,
+        note: changed.join('; ')
+      });
+      return changed;
+    });
+  }
+
+  // ------------------------------------------------------- reconciliation ----
+
+  // What the operator would see before deciding. actual = the next file number
+  // read off the instrument.
+  function reconcileCheck(state, actual) {
+    var expected = state.nextFileNum;
+    var gap = actual - expected;
+    return {
+      expected: expected,
+      actual: actual,
+      gap: gap,
+      match: gap === 0,
+      // gap > 0: files exist that no row claims. gap < 0: the app counted
+      // ahead of the instrument, so something was logged that never happened.
+      kind: gap === 0 ? 'match' : (gap > 0 ? 'unaccounted' : 'app_ahead')
+    };
+  }
+
+  // choice: 'accept' (log the gap and resync) or 'note' (record the mismatch
+  // and leave the counter alone, for correcting via the event log instead).
+  function reconcile(state, actual, choice) {
+    var check = reconcileCheck(state, actual);
+    return transact(state, 'reconcile', function (ctx) {
+      state.needsReconcile = false;
+
+      if (check.match) {
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'match'
+        });
+        return check;
+      }
+
+      if (choice === 'accept') {
+        if (check.gap > 0) {
+          // Each unaccounted number becomes a discard, so the log still
+          // explains every file the instrument holds.
+          for (var num = check.expected; num < actual; num++) {
+            ctx.log('discard', {
+              file_num: num,
+              plan_row_index: state.cursor,
+              note: 'unaccounted at reconcile'
+            });
+          }
+        }
+        state.nextFileNum = actual;
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'resync ' + check.expected + ' -> ' + actual +
+                (check.gap > 0 ? ' (' + check.gap + ' unaccounted)' : ' (app was ahead by ' + (-check.gap) + ')')
+        });
+      } else {
+        ctx.log('reconcile', {
+          file_num: actual,
+          plan_row_index: state.cursor,
+          note: 'mismatch noted: instrument ' + actual + ', app ' + check.expected + ' (not resynced)'
+        });
+      }
+      return check;
+    });
+  }
+
+  // ---------------------------------------------------------- undo / redo ----
+
+  function canUndo(state) { return state.undoStack.length > 0; }
+  function canRedo(state) { return state.redoStack.length > 0; }
+
+  function removeEvents(state, events) {
+    if (!events.length) { return; }
+    var ids = {};
+    for (var i = 0; i < events.length; i++) { ids[events[i].id] = true; }
+    state.events = state.events.filter(function (ev) { return !ids[ev.id]; });
+  }
+
+  // Reverses the last action exactly, log entries included. The removed
+  // entries ride along on the transaction, so the log never carries a trace of
+  // an action that was taken back - an undone confirm leaves no confirm.
+  function undo(state) {
+    if (!canUndo(state)) { return null; }
+    var tx = state.undoStack.pop();
+    applyCells(state, tx.cellsBefore);
+    restoreScalars(state, tx.before);
+    removeEvents(state, tx.events);
+    state.redoStack.push(tx);
+    return tx;
+  }
+
+  // Re-applies the top of the redo stack exactly, putting its log entries back
+  // where they were.
+  function redo(state) {
+    if (!canRedo(state)) { return null; }
+    var tx = state.redoStack.pop();
+    applyCells(state, tx.cellsAfter);
+    restoreScalars(state, tx.after);
+    for (var i = 0; i < tx.events.length; i++) { state.events.push(tx.events[i]); }
+    state.undoStack.push(tx);
+    while (state.undoStack.length > state.config.undoDepth) { state.undoStack.shift(); }
+    return tx;
+  }
+
+  // --------------------------------------------------------- navigation ----
+
+  // Cursor only: no file numbers move, nothing is logged, nothing lands on the
+  // undo stack. Skipping a row and coming back is not an edit.
+  function moveCursor(state, delta) {
+    var target = state.cursor + delta;
+    if (target < 0) { target = 0; }
+    if (target > state.plan.length - 1) { target = Math.max(0, state.plan.length - 1); }
+    state.cursor = target;
+    return state.cursor;
+  }
+
+  function jumpTo(state, rowIndex) {
+    if (rowIndex < 0 || rowIndex >= state.plan.length) { return state.cursor; }
+    state.cursor = rowIndex;
+    return state.cursor;
+  }
+
+  // ---------------------------------------------------------- validation ----
+
+  // Warn, never block. The operator is in a glasshouse and knows things the
+  // app does not.
+  function validate(state) {
+    var warnings = [];
+    var seen = {};
+    var duplicates = {};
+    var blanks = [];
+    var prev = null;
+    var nonMonotonic = [];
+
+    for (var i = 0; i < state.plan.length; i++) {
+      var raw = state.plan[i].FileNum;
+      if (isBlank(raw)) { blanks.push(i); continue; }
+      var num = toFileNum(raw);
+      var key = String(raw).trim();
+      if (seen[key] !== undefined) {
+        if (!duplicates[key]) { duplicates[key] = [seen[key]]; }
+        duplicates[key].push(i);
+      } else {
+        seen[key] = i;
+      }
+      if (num !== null) {
+        if (prev !== null && num <= prev) { nonMonotonic.push(i); }
+        prev = num;
+      }
+    }
+
+    var dupKeys = Object.keys(duplicates);
+    if (dupKeys.length) {
+      warnings.push({
+        code: 'duplicate_file_num',
+        message: 'Duplicate FileNum: ' + dupKeys.map(function (k) {
+          return k + ' (rows ' + duplicates[k].map(function (r) { return r + 1; }).join(', ') + ')';
+        }).join('; '),
+        rows: dupKeys.reduce(function (acc, k) { return acc.concat(duplicates[k]); }, [])
+      });
+    }
+
+    if (nonMonotonic.length) {
+      warnings.push({
+        code: 'non_monotonic',
+        message: 'FileNum goes backwards at ' + nonMonotonic.length + ' row(s)',
+        rows: nonMonotonic
+      });
+    }
+
+    if (blanks.length) {
+      warnings.push({
+        code: 'blank_file_num',
+        message: blanks.length + ' row(s) have no FileNum',
+        rows: blanks
+      });
+    }
+
+    if (state.header.indexOf('plate') !== -1) {
+      var counts = {};
+      var order = [];
+      for (var p = 0; p < state.plan.length; p++) {
+        var plate = String(state.plan[p].plate || '');
+        if (counts[plate] === undefined) { counts[plate] = 0; order.push(plate); }
+        counts[plate] += 1;
+      }
+      var modal = modeOf(order.map(function (k) { return counts[k]; }));
+      var odd = order.filter(function (k) { return counts[k] !== modal; });
+      if (odd.length && order.length > 1) {
+        warnings.push({
+          code: 'plate_row_count',
+          message: 'Plate row count differs from the usual ' + modal + ': ' +
+            odd.map(function (k) { return (k || '(blank)') + '=' + counts[k]; }).join(', '),
+          rows: []
+        });
+      }
+    }
+
+    var unsetMeta = ['Date', 'Prefix', 'Subfolder'].filter(function (col) {
+      if (state.header.indexOf(col) === -1) { return false; }
+      for (var i = 0; i < state.plan.length; i++) {
+        if (!isBlank(state.plan[i][col])) { return false; }
+      }
+      return true;
+    });
+    if (unsetMeta.length) {
+      warnings.push({
+        code: 'meta_never_set',
+        message: 'Never set: ' + unsetMeta.join(', '),
+        rows: []
+      });
+    }
+
+    return warnings;
+  }
+
+  function modeOf(values) {
+    var tally = {};
+    var best = null;
+    var bestCount = 0;
+    for (var i = 0; i < values.length; i++) {
+      var v = values[i];
+      tally[v] = (tally[v] || 0) + 1;
+      if (tally[v] > bestCount) { bestCount = tally[v]; best = v; }
+    }
+    return best;
+  }
+
+  // -------------------------------------------------------------- export ----
+
+  function exportPlanCSV(state) {
+    return serializeCSV(state.header, state.plan, {
+      eol: state.eol,
+      trailingNewline: state.trailingNewline,
+      alwaysQuote: ['comments']
+    });
+  }
+
+  function eventLogHeader(state) {
+    return ['timestamp', 'action', 'file_num', 'plan_row_index', 'note'].concat(identityCols(state.header));
+  }
+
+  function exportEventsCSV(state) {
+    var header = eventLogHeader(state);
+    var idCols = identityCols(state.header);
+    var rows = state.events.map(function (ev) {
+      var row = {
+        timestamp: ev.timestamp,
+        action: ev.action,
+        file_num: ev.file_num,
+        plan_row_index: ev.plan_row_index,
+        note: ev.note
+      };
+      for (var i = 0; i < idCols.length; i++) {
+        row[idCols[i]] = ev.identity[idCols[i]] || '';
+      }
+      return row;
+    });
+    return serializeCSV(header, rows, {
+      eol: state.eol,
+      trailingNewline: state.trailingNewline,
+      alwaysQuote: ['note']
+    });
+  }
+
+  function exportSessionJSON(state) {
+    return JSON.stringify(state, null, 2);
+  }
+
+  function importSessionJSON(text) {
+    var parsed = JSON.parse(text);
+    if (!parsed || parsed.version !== SESSION_VERSION) {
+      var err = new Error('Unsupported session version: ' + (parsed && parsed.version));
+      err.code = 'BAD_SESSION';
+      throw err;
+    }
+    parsed.config = Object.assign({}, DEFAULT_CONFIG, parsed.config || {});
+    parsed.undoStack = parsed.undoStack || [];
+    parsed.redoStack = parsed.redoStack || [];
+    parsed.events = parsed.events || [];
+    return parsed;
+  }
+
+  // --------------------------------------------------------- view helpers ----
+
+  // Progress within the current plate when a plate column exists, global
+  // otherwise. Nothing else is keyed on the plate column.
+  function progress(state) {
+    var hasPlate = state.header.indexOf('plate') !== -1;
+    if (hasPlate) {
+      var plate = String(state.plan[state.cursor] ? (state.plan[state.cursor].plate || '') : '');
+      var total = 0;
+      var done = 0;
+      for (var i = 0; i < state.plan.length; i++) {
+        if (String(state.plan[i].plate || '') !== plate) { continue; }
+        total += 1;
+        if (!isBlank(state.plan[i].FileNum)) { done += 1; }
+      }
+      return { label: plate, done: done, total: total, scoped: true };
+    }
+    return { label: '', done: countFilled(state.plan), total: state.plan.length, scoped: false };
+  }
+
+  // Identity fields of a row, in file order, empties omitted. `row` and
+  // `range` are pulled out for the big line on the card: they are the plan's
+  // physical coordinates, the thing the operator is standing in front of, and
+  // every plan shape has them. BCN does not lead - an N30 plan repeats 30 of
+  // them across 360 rows, so it identifies nothing on its own.
+  //
+  // This is the only place a column name affects anything, and it degrades:
+  // with neither column present the first non-empty identity field leads.
+  var LEAD_COLS = ['row', 'range'];
+
+  function rowIdentity(state, rowIndex) {
+    var row = state.plan[rowIndex];
+    if (!row) { return { lead: [], fields: [] }; }
+    var cols = identityCols(state.header);
+    var lead = [];
+    var fields = [];
+    for (var i = 0; i < cols.length; i++) {
+      var col = cols[i];
+      if (isBlank(row[col])) { continue; }
+      var pair = { key: col, value: String(row[col]) };
+      if (LEAD_COLS.indexOf(col) !== -1) { lead.push(pair); } else { fields.push(pair); }
+    }
+    // LEAD_COLS order rather than file order, so the line always reads
+    // "row N  range M".
+    lead.sort(function (a, b) { return LEAD_COLS.indexOf(a.key) - LEAD_COLS.indexOf(b.key); });
+    if (!lead.length && fields.length) { lead = [fields.shift()]; }
+    return { lead: lead, fields: fields };
+  }
+
+  return {
+    CAPTURE_COLS: CAPTURE_COLS,
+    TRACKED_COLS: TRACKED_COLS,
+    REQUIRED_COLS: REQUIRED_COLS,
+    DEFAULT_CONFIG: DEFAULT_CONFIG,
+    SESSION_VERSION: SESSION_VERSION,
+
+    parseCSV: parseCSV,
+    serializeCSV: serializeCSV,
+    quoteField: quoteField,
+
+    createSession: createSession,
+    identityCols: identityCols,
+    missingRequired: missingRequired,
+    effectiveValue: effectiveValue,
+    isBlank: isBlank,
+    toFileNum: toFileNum,
+    isFilled: isFilled,
+    nextUnfilled: nextUnfilled,
+
+    confirm: confirm,
+    overwrite: overwrite,
+    discard: discard,
+    whiteRef: whiteRef,
+    setComment: setComment,
+    setMeta: setMeta,
+    reconcileCheck: reconcileCheck,
+    reconcile: reconcile,
+    undo: undo,
+    redo: redo,
+    canUndo: canUndo,
+    canRedo: canRedo,
+    moveCursor: moveCursor,
+    jumpTo: jumpTo,
+
+    validate: validate,
+    exportPlanCSV: exportPlanCSV,
+    exportEventsCSV: exportEventsCSV,
+    eventLogHeader: eventLogHeader,
+    exportSessionJSON: exportSessionJSON,
+    importSessionJSON: importSessionJSON,
+
+    progress: progress,
+    rowIdentity: rowIdentity
+  };
+});
+</script>
+
+</body>
+</html>

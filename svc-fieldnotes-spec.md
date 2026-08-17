@@ -54,7 +54,7 @@ Column roles:
 |---|---|---|
 | Per-row capture | `FileNum`, `comments` | Filled by the app on every captured row |
 | Change-tracked values | `WRNum`, `Date`, `Prefix`, `Subfolder` | Written only on the row where the value changes, blank everywhere else - downstream imputes by forward-fill |
-| Target identity (read-only) | Everything else | Displayed when present and non-empty, never edited. `BCN` gets the layout prominence when present - it is the field a mis-tap corrupts invisibly |
+| Target identity (read-only) | Everything else | Displayed when present and non-empty, never edited. `row` and `range` get the layout prominence when present - they are the plan's physical coordinates. `BCN` does not lead: an N30 plan repeats 30 of them across 360 rows |
 
 The identity set varies per project: `WGA5101` has no `treatment`; `WGA-N30` has no
 `plate`, `Q2_pos`, or `order`, adds `ecotype`, and its `tech_rep` is present but
@@ -85,10 +85,11 @@ Rules:
 2. **Event log CSV** - audit trail, one row per action:
    `timestamp,action,file_num,plan_row_index,note`
    (identity fields logged when present). `action` is one of
-   `confirm | discard | white_ref | overwrite | undo | redo | comment | meta | reconcile`.
+   `confirm | discard | white_ref | overwrite | comment | meta | reconcile`.
    This is the bit Excel never gave us: discarded file numbers become data instead of
-   folklore. Append-only, with one exception: Undo removes the entry it reverses
-   (see section 4).
+   folklore. Append-only, with one exception: Undo removes the entry it reverses and
+   parks it on the redo stack; Redo puts it back (see section 4). Undo and Redo are not
+   themselves logged - the log records what happened, not what was reconsidered.
 3. **Session JSON** - full app state, for resume or for moving to another device.
 
 Export mechanism, in order of preference, with fallbacks because old WebViews are bad
@@ -130,8 +131,8 @@ separate "type a number" path outside the reconcile box.
 | **Overwrite** | +1 | next unfilled row | Only on filled rows (the Confirm button relabels). The row's old `FileNum` goes to the log as a discard note; the row is reassigned the displayed number. |
 | **Discard** ("bad scan") | +1 | unchanged | The file exists on the instrument but is junk. Optional reason. |
 | **White reference** | +1 if `config.wrConsumesFileNumber` else 0 | unchanged | Sets `currentWR`; the next Confirm stamps it into `WRNum`. Triggers the reconcile prompt (section 5). |
-| **Undo** | restore | restore | Reverses the last action exactly, removes its log entry, and pushes it onto `redoStack`. |
-| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly. Any new action clears `redoStack` and disables Redo. |
+| **Undo** | restore | restore | Reverses the last action exactly, removes its log entries, and pushes the whole lot onto `redoStack`. Leaves no log entry of its own. |
+| **Redo** | re-apply | re-apply | Re-applies the top of `redoStack` exactly, log entries included. Any new action clears `redoStack` and disables Redo. |
 | **Next/Last row** | unchanged | +1 / -1 | Cursor navigation only - for skipping a row (or several) and coming back. Touches no file numbers. Not the same as Undo. |
 | **Jump** | unchanged | to chosen row | Opens the full-screen row list (section 6). |
 | **Comment** | unchanged | unchanged | Free text on the current row. Always quoted in output, newlines preserved. |
@@ -209,7 +210,9 @@ Portrait first, landscape supported.
 Notes on the layout:
 
 - The card renders the row's identity fields as key=value lines, whatever they happen
-  to be; empty values are omitted. Same for the "next up" preview line.
+  to be; empty values are omitted. Same for the "next up" preview line. `row` and
+  `range` are lifted out of that block onto the big line; with neither present the
+  first non-empty identity field leads instead.
 - The status strip shows plate and within-plate progress when a `plate` column exists
   (`Plate 2  12/44`), plain global progress otherwise (`156/360`).
 - The "next up" preview line is cheap and catches "am I standing at the right plant"
@@ -308,15 +311,22 @@ Other constraints:
 
 ## 12. Testing
 
-- Fixtures: all three plan CSVs, because they pin down the genericness:
-  - `WGA300-Day1.csv` (176 rows, 4 plates of 44, non-contiguous `row` values in
-    plate 3, `tech_rep` pairs at the start of each plate, non-numeric `BCN` values
-    `V1` and `V3`).
-  - `WGA5101-Day1.csv` (same shape but no `treatment` column, `Com*` BCNs).
-  - `WGA-N30-Day1.csv` (360 rows, no `plate`/`Q2_pos`/`order`, an `ecotype` column,
+- Fixtures: small synthetic files in `tests/fixtures/`, one per real plan shape, with
+  invented BCNs and site codes so the committed corpus carries no real trial data.
+  The three shapes pin down the genericness:
+  - `plan-a.csv` (WGA300 shape: plates, non-contiguous `row` values, `tech_rep` pairs,
+    non-numeric `BCN` values `V1` and `V3`, CRLF).
+  - `plan-b.csv` (WGA5101 shape: no `treatment` column, `Com*` BCNs, partly empty
+    `tech_rep`, LF).
+  - `plan-c.csv` (N30 shape: no `plate`/`Q2_pos`/`order`, an `ecotype` column,
     `tech_rep` present but entirely empty, `row` resetting at block boundaries).
+  Plus `plan-partial.csv` (resume case) and `plan-odd.csv` (unknown columns, quoted
+  comments with commas, quotes and newlines).
   Together: no behaviour may be keyed on an optional column by name, and do not
   assume `BCN` parses as an integer.
+- The real day files live in `real-data/`, untracked. When that folder is present the
+  harness also loads each file as a smoke test - real row counts, real column sets -
+  and skips silently when it is not.
 - Harness: the no-build constraint applies to the shipped file, not the tests. Structure
   the file so the core logic (CSV parse/serialise + the action state machine) is
   DOM-free and loadable in Node; the golden-file harness lives outside the artifact.

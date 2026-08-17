@@ -1,0 +1,14 @@
+{
+  "description": "A plan shape with no plate column, and a Subfolder change mid-session at a battery swap.",
+  "fixture": "plan-c.csv",
+  "config": { "startFileNum": 10 },
+  "meta": { "Date": "2026-08-18", "Prefix": "TLN30", "Subfolder": "block1" },
+  "actions": [
+    ["confirm"],
+    ["confirm"],
+    ["meta", { "Subfolder": "block2" }],
+    ["confirm"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

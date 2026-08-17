@@ -1,0 +1,14 @@
+{
+  "description": "White reference, immediately followed by a discard, then capture. WRNum lands once.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["confirm"],
+    ["whiteRef"],
+    ["reconcile", 87, "accept"],
+    ["discard", "moved during scan"],
+    ["confirm"],
+    ["confirm"]
+  ]
+}

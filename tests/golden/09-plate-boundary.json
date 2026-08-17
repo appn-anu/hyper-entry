@@ -1,0 +1,22 @@
+{
+  "description": "A full walk of both plates, with a white reference and reconcile at each plate start, and a skipped row picked up later.",
+  "fixture": "plan-a.csv",
+  "config": { "startFileNum": 85 },
+  "meta": { "Date": "2026-08-18", "Prefix": "KLN300", "Subfolder": "day1" },
+  "actions": [
+    ["whiteRef"],
+    ["reconcile", 86, "accept"],
+    ["confirm"],
+    ["confirm"],
+    ["next"],
+    ["confirm"],
+    ["whiteRef"],
+    ["reconcile", 91, "accept"],
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["confirm"],
+    ["jump", 2],
+    ["confirm"]
+  ]
+}
